@@ -1,0 +1,103 @@
+{
+    "name": "User",
+    "morning_routine": "Exercise",
+    "preferences": [
+        {
+            "text": "I prefer studying at night",
+            "note": "",
+            "added_at": "2026-10-06 00:59:58"
+        }
+    ],
+    "routines": [],
+    "future_events": [
+        {
+            "text": "i have an interview on tomorrow , ineed to prepare, i want to go hospital for eye checkup. go to super market",
+            "note": "",
+            "added_at": "2026-10-06 01:09:46"
+        }
+    ],
+    "constraints": [
+        {
+            "text": "Schedule constraint: I have college from 9 AM to 4 PM",
+            "note": "",
+            "added_at": "2026-10-06 00:59:58"
+        },
+        {
+            "text": "Schedule constraint: I have class from 9 AM to 1 PM. After class I want to study for 3 hours.",
+            "note": "",
+            "added_at": "2026-10-06 02:46:35"
+        },
+        {
+            "text": "Schedule constraint: College from 9 AM to 1 PM. I want to have breakfast before college.",
+            "note": "",
+            "added_at": "2026-10-06 13:13:09"
+        },
+        {
+            "text": "Schedule constraint: College from 9 AM to 1 PM. I want to exercise and have breakfast before college.",
+            "note": "",
+            "added_at": "2026-10-06 13:13:10"
+        },
+        {
+            "text": "Schedule constraint: i have class from 11:00 am to 2:30pm, i want to go shopping, i have a to met friends and i have to wash dress.",
+            "note": "",
+            "added_at": "2026-10-07 11:59:37"
+        }
+    ],
+    "sleep_schedule": [
+        {
+            "text": "Sleep at 10:30 pm",
+            "note": "",
+            "added_at": "2026-10-06 00:59:58"
+        }
+    ],
+    "_raw": [
+        {
+            "category": "constraints",
+            "text": "Schedule constraint: I have college from 9 AM to 4 PM",
+            "note": "",
+            "added_at": "2026-10-06 00:59:58"
+        },
+        {
+            "category": "preferences",
+            "text": "I prefer studying at night",
+            "note": "",
+            "added_at": "2026-10-06 00:59:58"
+        },
+        {
+            "category": "sleep_schedule",
+            "text": "Sleep at 10:30 pm",
+            "note": "",
+            "added_at": "2026-10-06 00:59:58"
+        },
+        {
+            "category": "future_events",
+            "text": "i have an interview on tomorrow , ineed to prepare, i want to go hospital for eye checkup. go to super market",
+            "note": "",
+            "added_at": "2026-10-06 01:09:46"
+        },
+        {
+            "category": "constraints",
+            "text": "Schedule constraint: I have class from 9 AM to 1 PM. After class I want to study for 3 hours.",
+            "note": "",
+            "added_at": "2026-10-06 02:46:35"
+        },
+        {
+            "category": "constraints",
+            "text": "Schedule constraint: College from 9 AM to 1 PM. I want to have breakfast before college.",
+            "note": "",
+            "added_at": "2026-10-06 13:13:09"
+        },
+        {
+            "category": "constraints",
+            "text": "Schedule constraint: College from 9 AM to 1 PM. I want to exercise and have breakfast before college.",
+            "note": "",
+            "added_at": "2026-10-06 13:13:10"
+        },
+        {
+            "category": "constraints",
+            "text": "Schedule constraint: i have class from 11:00 am to 2:30pm, i want to go shopping, i have a to met friends and i have to wash dress.",
+            "note": "",
+            "added_at": "2026-10-07 11:59:37"
+        }
+    ]
+}
