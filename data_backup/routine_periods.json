@@ -1,0 +1,337 @@
+[
+    {
+        "name": "Fall Semester 2026",
+        "start_date": "2026-10-08",
+        "end_date": "2026-11-07",
+        "common_tasks": [
+            {
+                "name": "Exercise",
+                "default_time": "06:00",
+                "duration": 60,
+                "category": "Health"
+            },
+            {
+                "name": "Breakfast",
+                "default_time": "07:30",
+                "duration": 30,
+                "category": "Meal"
+            },
+            {
+                "name": "College",
+                "default_time": "09:00",
+                "duration": 240,
+                "category": "Education"
+            },
+            {
+                "name": "Lunch",
+                "default_time": "13:00",
+                "duration": 60,
+                "category": "Meal"
+            },
+            {
+                "name": "Study",
+                "default_time": "20:00",
+                "duration": 120,
+                "category": "Education"
+            }
+        ],
+        "days_config": {
+            "Monday": [
+                {
+                    "name": "Exercise",
+                    "time": "06:00",
+                    "duration": 60,
+                    "category": "Health",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Breakfast",
+                    "time": "07:30",
+                    "duration": 30,
+                    "category": "Meal",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "College",
+                    "time": "09:00",
+                    "duration": 240,
+                    "category": "Education",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Lunch",
+                    "time": "13:00",
+                    "duration": 60,
+                    "category": "Meal",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Study",
+                    "time": "20:00",
+                    "duration": 120,
+                    "category": "Education",
+                    "is_override": false,
+                    "enabled": true
+                }
+            ],
+            "Tuesday": [
+                {
+                    "name": "Exercise",
+                    "time": "06:00",
+                    "duration": 60,
+                    "category": "Health",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Breakfast",
+                    "time": "07:30",
+                    "duration": 30,
+                    "category": "Meal",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "College",
+                    "time": "09:00",
+                    "duration": 240,
+                    "category": "Education",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Lunch",
+                    "time": "13:00",
+                    "duration": 60,
+                    "category": "Meal",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Study",
+                    "time": "20:00",
+                    "duration": 120,
+                    "category": "Education",
+                    "is_override": false,
+                    "enabled": true
+                }
+            ],
+            "Wednesday": [
+                {
+                    "name": "Exercise",
+                    "time": "06:00",
+                    "duration": 60,
+                    "category": "Health",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Breakfast",
+                    "time": "07:30",
+                    "duration": 30,
+                    "category": "Meal",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "College",
+                    "time": "09:00",
+                    "duration": 240,
+                    "category": "Education",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Lunch",
+                    "time": "13:00",
+                    "duration": 60,
+                    "category": "Meal",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Study",
+                    "time": "20:00",
+                    "duration": 120,
+                    "category": "Education",
+                    "is_override": false,
+                    "enabled": true
+                }
+            ],
+            "Thursday": [
+                {
+                    "name": "Exercise",
+                    "time": "06:00",
+                    "duration": 60,
+                    "category": "Health",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Breakfast",
+                    "time": "07:30",
+                    "duration": 30,
+                    "category": "Meal",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "College",
+                    "time": "09:00",
+                    "duration": 240,
+                    "category": "Education",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Lunch",
+                    "time": "13:00",
+                    "duration": 60,
+                    "category": "Meal",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Study",
+                    "time": "20:00",
+                    "duration": 120,
+                    "category": "Education",
+                    "is_override": false,
+                    "enabled": true
+                }
+            ],
+            "Friday": [
+                {
+                    "name": "Exercise",
+                    "time": "06:00",
+                    "duration": 60,
+                    "category": "Health",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Breakfast",
+                    "time": "07:30",
+                    "duration": 30,
+                    "category": "Meal",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "College",
+                    "time": "09:00",
+                    "duration": 240,
+                    "category": "Education",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Lunch",
+                    "time": "13:00",
+                    "duration": 60,
+                    "category": "Meal",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Study",
+                    "time": "20:00",
+                    "duration": 120,
+                    "category": "Education",
+                    "is_override": false,
+                    "enabled": true
+                }
+            ],
+            "Saturday": [
+                {
+                    "name": "Exercise",
+                    "time": "06:00",
+                    "duration": 60,
+                    "category": "Health",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Breakfast",
+                    "time": "07:30",
+                    "duration": 30,
+                    "category": "Meal",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "College",
+                    "time": "09:00",
+                    "duration": 240,
+                    "category": "Education",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Lunch",
+                    "time": "13:00",
+                    "duration": 60,
+                    "category": "Meal",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Study",
+                    "time": "20:00",
+                    "duration": 120,
+                    "category": "Education",
+                    "is_override": false,
+                    "enabled": true
+                }
+            ],
+            "Sunday": [
+                {
+                    "name": "Exercise",
+                    "time": "06:00",
+                    "duration": 60,
+                    "category": "Health",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Breakfast",
+                    "time": "07:30",
+                    "duration": 30,
+                    "category": "Meal",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "College",
+                    "time": "09:00",
+                    "duration": 240,
+                    "category": "Education",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Lunch",
+                    "time": "13:00",
+                    "duration": 60,
+                    "category": "Meal",
+                    "is_override": false,
+                    "enabled": true
+                },
+                {
+                    "name": "Study",
+                    "time": "20:00",
+                    "duration": 120,
+                    "category": "Education",
+                    "is_override": false,
+                    "enabled": true
+                }
+            ]
+        },
+        "enabled": true,
+        "period_id": "263f2dc6"
+    }
+]

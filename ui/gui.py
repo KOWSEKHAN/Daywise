@@ -1,27 +1,46 @@
 """
 ui/gui.py
 
-DayWise Tkinter Desktop GUI - Rich Timeline & Dashboard Visual Theme
+DayWise Tkinter Desktop GUI – Rich Lifecycle Dashboard Theme
+Zero third-party dependencies – pure Python + Tkinter standard library.
 
-A clean, responsive, professional desktop daily planning application.
-Rich visual timeline cards, emojis, pastel badges, and dashboard overview.
-No third-party libraries – pure Python + Tkinter standard library.
-
-Interactive Clarification System:
-When the planner requires more information (e.g., college start/end times),
-the Plan My Day page shows a focused clarification prompt instead of a schedule,
-collecting the missing data before generating the final plan.
+Full Personal Planning Lifecycle:
+  Routines (Periods + Mon-Sun Overrides + Common Library)
+    ↓
+  Plan My Day (Date Selection + Applicable Routines + One-Time Tasks + NLP)
+    ↓
+  Generate Plan & Review/Inline Edit
+    ↓
+  Confirm Plan (Today → Active Plan | Future → Future Confirmed Plan)
+    ↓
+  Today's Plan (Live Execution, Inline Status Tracking, Inline Notes, Inline Editing)
+    ↓
+  Day Closure / Rollover (Automatic or Manual Finalization)
+    ↓
+  History (Immutable by Default, Audited Historical Edits with Mandatory Note)
 """
 
 import re
 import tkinter as tk
 from tkinter import ttk, messagebox
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from core.planner import Planner
 from core.scheduler import time_to_minutes, minutes_to_time
-from utils.date_utils import format_date_display, today_str
+from utils.date_utils import (
+    format_date_display,
+    today_str,
+    tomorrow_str,
+    parse_date_str,
+    get_weekday_name,
+    is_today,
+    is_future_date,
+    is_past_date,
+    validate_date_range,
+)
 from utils.text_utils import truncate
+from models.routine import DAYS_OF_WEEK, RoutineTaskTemplate, DayRoutineItem, RoutinePeriod
+from models.plan import PlanStatus
 
 
 # ============================================================
@@ -48,6 +67,9 @@ BTN_BG         = "#2563eb"   # Primary button bg
 BTN_FG         = "#ffffff"
 BTN_HOVER      = "#1d4ed8"
 
+BTN_SUCCESS_BG = "#16a34a"   # Green confirm bg
+BTN_SUCCESS_HOVER = "#15803d"
+
 BTN_SEC_BG     = "#e2e8f0"   # Secondary button bg
 BTN_SEC_FG     = "#0f172a"
 BTN_SEC_HOVER  = "#cbd5e1"
@@ -69,36 +91,43 @@ FONT_MONO      = ("Consolas", 10, "bold")
 
 # Soft Pastel Badge Styling: (Background, Text Color)
 BADGE_STYLES = {
-    # Priorities & Types
-    "very high": ("#fee2e2", "#991b1b"),  # soft red
-    "high":      ("#ffedd5", "#9a3412"),  # soft orange
-    "normal":    ("#fef9c3", "#854d0e"),  # soft yellow
-    "low":       ("#dcfce7", "#166534"),  # soft green
-    "fixed":     ("#dbeafe", "#1e40af"),  # soft blue
-    "event":     ("#dbeafe", "#1e40af"),  # soft blue
-    "task":      ("#e0e7ff", "#3730a3"),  # soft indigo
-    "routine":   ("#e0f2fe", "#0369a1"),  # soft cyan
-    "break":     ("#f1f5f9", "#475569"),  # soft gray
+    # Sources / Types
+    "routine":        ("#e0f2fe", "#0369a1"),  # soft cyan
+    "one-time":       ("#fae8ff", "#86198f"),  # soft purple
+    "override":       ("#fef3c7", "#92400e"),  # soft amber
+    "fixed":          ("#dbeafe", "#1e40af"),  # soft blue
+    "break":          ("#f1f5f9", "#475569"),  # soft gray
+    "task":           ("#e0e7ff", "#3730a3"),  # soft indigo
+
+    # Priorities
+    "very high":      ("#fee2e2", "#991b1b"),  # soft red
+    "high":           ("#ffedd5", "#9a3412"),  # soft orange
+    "normal":         ("#fef9c3", "#854d0e"),  # soft yellow
+    "low":            ("#dcfce7", "#166534"),  # soft green
 
     # Statuses
-    "pending":   ("#ffedd5", "#9a3412"),  # soft orange
-    "scheduled": ("#dbeafe", "#1e40af"),  # soft blue
-    "completed": ("#dcfce7", "#166534"),  # soft green
-    "cancelled": ("#fee2e2", "#991b1b"),  # soft red
+    "pending":        ("#ffedd5", "#9a3412"),  # soft orange
+    "not_completed":  ("#fee2e2", "#991b1b"),  # soft red
+    "not completed":  ("#fee2e2", "#991b1b"),  # soft red
+    "scheduled":      ("#dbeafe", "#1e40af"),  # soft blue
+    "completed":      ("#dcfce7", "#166534"),  # soft green
+    "active":         ("#dcfce7", "#166534"),  # soft green
+    "future_confirmed": ("#e0f2fe", "#0369a1"), # soft cyan
+    "finalized":      ("#f1f5f9", "#475569"),  # soft gray
+    "edited":         ("#fef3c7", "#92400e"),  # soft amber
 }
 
-# Node colors for visual timeline
 TIMELINE_DOTS = ["🟢", "🔵", "🟣", "🟠", "🔴", "🟤", "⚪"]
 
 
 # ============================================================
-# EMOJI & SUBTITLE HELPERS
+# CONTEXTUAL ICONS & DESCRIPTIONS
 # ============================================================
 
 def get_icon_for_title(title, context="", etype=""):
     """Returns a contextual unicode icon based on title, context, or type."""
     text = (str(title) + " " + str(context)).lower()
-    
+
     if "gym" in text or "workout" in text or "fitness" in text:
         return "🏋"
     if "exercise" in text or "run" in text or "walk" in text or "jog" in text or "yoga" in text:
@@ -167,10 +196,10 @@ def get_description_for_title(title, etype=""):
 def format_12h(time_str):
     """Formats HH:MM string to HH:MM AM/PM string if valid."""
     try:
-        dt = datetime.strptime(time_str, "%H:%M")
+        dt = datetime.strptime(str(time_str).strip(), "%H:%M")
         return dt.strftime("%I:%M %p").lstrip("0")
     except Exception:
-        return time_str
+        return str(time_str)
 
 
 # ============================================================
@@ -188,10 +217,16 @@ class HoverButton(tk.Button):
         self.bind("<Leave>", self._on_leave)
 
     def _on_enter(self, _event):
-        self.config(bg=self._hover_bg)
+        try:
+            self.config(bg=self._hover_bg)
+        except Exception:
+            pass
 
     def _on_leave(self, _event):
-        self.config(bg=self._default_bg)
+        try:
+            self.config(bg=self._default_bg)
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -225,20 +260,92 @@ class ScrollableFrame(tk.Frame):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # Mouse-wheel scrolling
-        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(
-            int(-1 * (e.delta / 120)), "units"
-        ))
+        # Mouse-wheel scrolling across platforms
+        def _on_mousewheel(event):
+            if hasattr(event, "delta") and event.delta:
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            elif hasattr(event, "num"):
+                if event.num == 4:
+                    canvas.yview_scroll(-1, "units")
+                elif event.num == 5:
+                    canvas.yview_scroll(1, "units")
+
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
 
 # ============================================================
-# SCHEDULE TIMELINE CARD RENDERING WIDGET
+# BADGE RENDERING (SINGLE SOURCE OF TRUTH, ZERO DUPLICATES)
 # ============================================================
 
-def render_schedule(parent, schedule, bg=BG_MAIN, compact=False):
+def render_task_badges(parent, entry):
     """
-    Renders a schedule list into `parent` as a visual timeline with cards, emojis, and soft badges.
-    Guarantees no duplicate visual rows.
+    Renders standardized, non-duplicated semantic badges for a task or schedule entry.
+    Ensures that redundant badge combinations like [ROUTINE] [ROUTINE] are never created.
+    """
+    etype = str(entry.get("type", "task")).lower()
+    priority = str(entry.get("priority", "")).lower()
+    status = str(entry.get("status", "pending")).lower()
+    source = str(entry.get("source", "")).lower()
+    is_edited = entry.get("is_edited", False)
+
+    # 1. Audit Badge
+    if is_edited:
+        tk.Label(
+            parent, text=" EDITED ",
+            font=("Segoe UI", 8, "bold"), fg="#92400e",
+            bg="#fef3c7", padx=6, pady=2,
+        ).pack(side="right", padx=(4, 0))
+
+    # 2. Status Badge (for meaningful, non-pending statuses)
+    if status in BADGE_STYLES and status != "pending":
+        s_bg, s_fg = BADGE_STYLES[status]
+        tk.Label(
+            parent, text=f" {status.replace('_', ' ').upper()} ",
+            font=("Segoe UI", 8, "bold"), fg=s_fg,
+            bg=s_bg, padx=6, pady=2,
+        ).pack(side="right", padx=(4, 0))
+
+    # 3. Priority Badge (only if high or very high)
+    if priority in ("high", "very high") and priority in BADGE_STYLES:
+        p_bg, p_fg = BADGE_STYLES[priority]
+        tk.Label(
+            parent, text=f" {priority.upper()} ",
+            font=("Segoe UI", 8, "bold"), fg=p_fg,
+            bg=p_bg, padx=6, pady=2,
+        ).pack(side="right", padx=(4, 0))
+
+    # 4. Source / Type Badge (Single Meaningful Badge)
+    single_badge = None
+    if source == "override" or entry.get("is_override"):
+        single_badge = "override"
+    elif source == "routine" or etype == "routine":
+        single_badge = "routine"
+    elif source == "one-time":
+        single_badge = "one-time"
+    elif etype == "break":
+        single_badge = "break"
+    elif etype == "event" or entry.get("time_type") == "fixed":
+        single_badge = "fixed"
+    elif etype == "task":
+        single_badge = "task"
+
+    if single_badge and single_badge in BADGE_STYLES:
+        b_bg, b_fg = BADGE_STYLES[single_badge]
+        tk.Label(
+            parent, text=f" {single_badge.upper()} ",
+            font=("Segoe UI", 8, "bold"), fg=b_fg,
+            bg=b_bg, padx=6, pady=2,
+        ).pack(side="right")
+
+
+# ============================================================
+# SCHEDULE TIMELINE CARD RENDERING (INLINE EDITING SYSTEM)
+# ============================================================
+
+def render_schedule(parent, schedule, bg=BG_MAIN, compact=False, allow_actions=False, on_action=None):
+    """
+    Renders a schedule list into `parent` as an interactive visual timeline.
+    Supports complete INLINE EDITING and INLINE NOTES without any popup modals.
     """
     for widget in parent.winfo_children():
         widget.destroy()
@@ -253,14 +360,13 @@ def render_schedule(parent, schedule, bg=BG_MAIN, compact=False):
 
         tk.Label(
             empty_card,
-            text="No schedule entries available for this day.",
+            text="No schedule entries available.",
             font=FONT_BODY,
             bg=BG_CARD,
             fg=FG_MUTED,
         ).pack()
         return
 
-    # Filter out duplicate visual schedule items if any
     unique_schedule = []
     seen_entries = set()
     for entry in schedule:
@@ -276,23 +382,16 @@ def render_schedule(parent, schedule, bg=BG_MAIN, compact=False):
     timeline_container.pack(fill="both", expand=True, padx=4, pady=4)
 
     for idx, entry in enumerate(unique_schedule):
-        etype = str(entry.get("type", "task")).lower()
-        priority = str(entry.get("priority", "")).lower()
-        title_text = entry.get("title", "Task")
-        icon = get_icon_for_title(title_text, etype=etype)
-        desc_text = get_description_for_title(title_text, etype=etype)
-
-        start_12 = format_12h(entry.get("start", "00:00"))
-        end_12 = format_12h(entry.get("end", "00:00"))
-
-        dot = TIMELINE_DOTS[idx % len(TIMELINE_DOTS)]
-
         row_frame = tk.Frame(timeline_container, bg=bg)
         row_frame.pack(fill="x", expand=True, pady=6)
 
-        # Timeline Left Pillar: Dot + Connector Line + Time
+        # Timeline Left Pillar: Dot + Time
         pillar = tk.Frame(row_frame, bg=bg, width=140)
         pillar.pack(side="left", fill="y", padx=(0, 8))
+
+        dot = TIMELINE_DOTS[idx % len(TIMELINE_DOTS)]
+        start_12 = format_12h(entry.get("start", "00:00"))
+        end_12 = format_12h(entry.get("end", "00:00"))
 
         dot_label = tk.Label(
             pillar, text=f"{dot} {start_12}",
@@ -300,12 +399,13 @@ def render_schedule(parent, schedule, bg=BG_MAIN, compact=False):
         )
         dot_label.pack(anchor="w")
 
-        tk.Label(
+        time_sub_label = tk.Label(
             pillar, text=f"   – {end_12}",
             font=FONT_SMALL, fg=FG_MUTED, bg=bg, anchor="w"
-        ).pack(anchor="w")
+        )
+        time_sub_label.pack(anchor="w")
 
-        # Timeline Card (Right)
+        # Timeline Card Container
         card = tk.Frame(
             row_frame, bg=BG_CARD,
             highlightbackground=BORDER_COLOR, highlightthickness=1,
@@ -313,7 +413,36 @@ def render_schedule(parent, schedule, bg=BG_MAIN, compact=False):
         )
         card.pack(side="left", fill="x", expand=True)
 
-        # Card Top Row: Icon + Title + Badges
+        # Draw card in normal mode with closure over current entry state
+        _draw_card_content(card, entry, pillar, dot_label, time_sub_label, compact, allow_actions, on_action)
+
+
+def _draw_card_content(card, entry, pillar, dot_label, time_sub_label, compact, allow_actions, on_action, mode="normal"):
+    """
+    Renders card content in 'normal', 'edit', or 'note' mode.
+    All edits happen inline inside `card` with ZERO popups.
+    """
+    for w in card.winfo_children():
+        w.destroy()
+
+    title_text = entry.get("title", "Task")
+    start_time = entry.get("start", "00:00")
+    end_time = entry.get("end", "00:00")
+    etype = str(entry.get("type", "task")).lower()
+    task_id = entry.get("task_id") or title_text
+    icon = get_icon_for_title(title_text, etype=etype)
+    desc_text = get_description_for_title(title_text, etype=etype)
+    note_text = entry.get("note", "")
+
+    # Update pillar time labels
+    dot_label.config(text=f"{dot_label.cget('text').split()[0]} {format_12h(start_time)}")
+    time_sub_label.config(text=f"   – {format_12h(end_time)}")
+
+    # ========================================================
+    # MODE: NORMAL DISPLAY
+    # ========================================================
+    if mode == "normal":
+        # Top Row: Icon + Title + Badges
         top_line = tk.Frame(card, bg=BG_CARD)
         top_line.pack(fill="x")
 
@@ -322,12 +451,14 @@ def render_schedule(parent, schedule, bg=BG_MAIN, compact=False):
             font=("Segoe UI", 12), bg=BG_CARD
         ).pack(side="left")
 
-        tk.Label(
+        title_lbl = tk.Label(
             top_line, text=title_text,
             font=FONT_SUBHEAD, fg=FG_MAIN, bg=BG_CARD,
             anchor="w"
-        ).pack(side="left")
+        )
+        title_lbl.pack(side="left")
 
+        # Segment indicator
         if etype == "task":
             seg = entry.get("segment_number")
             tot = entry.get("total_segments")
@@ -337,33 +468,186 @@ def render_schedule(parent, schedule, bg=BG_MAIN, compact=False):
                     font=FONT_SMALL, fg=FG_MUTED, bg=BG_CARD,
                 ).pack(side="left")
 
-        # Badges (Right side of card)
+        # Badges (Deduplicated Single-Source Engine)
         badges_box = tk.Frame(top_line, bg=BG_CARD)
         badges_box.pack(side="right")
+        render_task_badges(badges_box, entry)
 
-        if priority and priority in BADGE_STYLES:
-            p_bg, p_fg = BADGE_STYLES[priority]
-            tk.Label(
-                badges_box, text=f" {priority.upper()} ",
-                font=("Segoe UI", 8, "bold"), fg=p_fg,
-                bg=p_bg, padx=6, pady=2,
-            ).pack(side="right", padx=(4, 0))
+        # Middle Row: Description + Note
+        desc_line = tk.Frame(card, bg=BG_CARD)
+        desc_line.pack(fill="x", pady=(4, 0))
 
-        badge_key = etype if etype in BADGE_STYLES else "task"
-        b_bg, b_fg = BADGE_STYLES[badge_key]
-        tk.Label(
-            badges_box, text=f" {etype.upper()} ",
-            font=("Segoe UI", 8, "bold"), fg=b_fg,
-            bg=b_bg, padx=6, pady=2,
-        ).pack(side="right")
-
-        # Card Bottom Row: Secondary Description
         if not compact:
             tk.Label(
-                card, text=desc_text,
+                desc_line, text=desc_text,
                 font=FONT_SMALL, fg=FG_MUTED, bg=BG_CARD,
                 anchor="w"
-            ).pack(anchor="w", pady=(4, 0))
+            ).pack(side="left")
+
+        if note_text:
+            tk.Label(
+                desc_line, text=f"  💬 Note: {note_text}",
+                font=("Segoe UI", 9, "italic"), fg="#0369a1", bg=BG_CARD,
+                anchor="w"
+            ).pack(side="left", padx=(8, 0))
+
+        # Bottom Row: Action Controls
+        if allow_actions and on_action:
+            action_line = tk.Frame(card, bg=BG_CARD)
+            action_line.pack(fill="x", pady=(8, 0))
+
+            HoverButton(
+                action_line, hover_bg="#bbf7d0",
+                text=" ✓ Complete ",
+                font=FONT_SMALL, bg="#dcfce7", fg="#166534",
+                relief="flat", padx=8, pady=3, cursor="hand2",
+                command=lambda: on_action("complete", task_id),
+            ).pack(side="left", padx=(0, 6))
+
+            HoverButton(
+                action_line, hover_bg="#fecaca",
+                text=" ✗ Incomplete ",
+                font=FONT_SMALL, bg="#fee2e2", fg="#991b1b",
+                relief="flat", padx=8, pady=3, cursor="hand2",
+                command=lambda: on_action("incomplete", task_id),
+            ).pack(side="left", padx=(0, 6))
+
+            HoverButton(
+                action_line, hover_bg=BTN_SEC_HOVER,
+                text=" 💬 Note ",
+                font=FONT_SMALL, bg=BTN_SEC_BG, fg=BTN_SEC_FG,
+                relief="flat", padx=8, pady=3, cursor="hand2",
+                command=lambda: _draw_card_content(card, entry, pillar, dot_label, time_sub_label, compact, allow_actions, on_action, mode="note"),
+            ).pack(side="left", padx=(0, 6))
+
+            HoverButton(
+                action_line, hover_bg=BTN_SEC_HOVER,
+                text=" ✎ Edit ",
+                font=FONT_SMALL, bg=BTN_SEC_BG, fg=BTN_SEC_FG,
+                relief="flat", padx=8, pady=3, cursor="hand2",
+                command=lambda: _draw_card_content(card, entry, pillar, dot_label, time_sub_label, compact, allow_actions, on_action, mode="edit"),
+            ).pack(side="left")
+
+    # ========================================================
+    # MODE: INLINE TASK EDIT
+    # ========================================================
+    elif mode == "edit":
+        edit_hdr = tk.Frame(card, bg=BG_CARD)
+        edit_hdr.pack(fill="x", pady=(0, 6))
+        tk.Label(
+            edit_hdr, text=f"✏️ Editing Task: {title_text}",
+            font=FONT_SUBHEAD, fg=PRIMARY_BLUE, bg=BG_CARD
+        ).pack(side="left")
+
+        form_grid = tk.Frame(card, bg=BG_CARD)
+        form_grid.pack(fill="x", pady=4)
+
+        tk.Label(form_grid, text="Task Name:", font=FONT_SMALL, fg=FG_MAIN, bg=BG_CARD).grid(row=0, column=0, sticky="w", padx=(0, 8))
+        t_var = tk.StringVar(value=title_text)
+        t_ent = tk.Entry(form_grid, textvariable=t_var, font=FONT_BODY, bg=ENTRY_BG, fg=ENTRY_FG, relief="flat", highlightbackground=ENTRY_BORDER, highlightthickness=1, width=28)
+        t_ent.grid(row=0, column=1, sticky="w", pady=2, ipady=2)
+
+        tk.Label(form_grid, text="Start Time (HH:MM):", font=FONT_SMALL, fg=FG_MAIN, bg=BG_CARD).grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(4, 0))
+        s_var = tk.StringVar(value=start_time)
+        s_ent = tk.Entry(form_grid, textvariable=s_var, font=FONT_BODY, bg=ENTRY_BG, fg=ENTRY_FG, relief="flat", highlightbackground=ENTRY_BORDER, highlightthickness=1, width=14)
+        s_ent.grid(row=1, column=1, sticky="w", pady=(4, 2), ipady=2)
+
+        tk.Label(form_grid, text="End Time (HH:MM):", font=FONT_SMALL, fg=FG_MAIN, bg=BG_CARD).grid(row=2, column=0, sticky="w", padx=(0, 8), pady=(4, 0))
+        e_var = tk.StringVar(value=end_time)
+        e_ent = tk.Entry(form_grid, textvariable=e_var, font=FONT_BODY, bg=ENTRY_BG, fg=ENTRY_FG, relief="flat", highlightbackground=ENTRY_BORDER, highlightthickness=1, width=14)
+        e_ent.grid(row=2, column=1, sticky="w", pady=(4, 2), ipady=2)
+
+        btn_row = tk.Frame(card, bg=BG_CARD)
+        btn_row.pack(fill="x", pady=(8, 0))
+
+        def _do_save():
+            new_title = t_var.get().strip()
+            new_s = s_var.get().strip()
+            new_e = e_var.get().strip()
+
+            if not new_title:
+                messagebox.showwarning("Validation Error", "Task title cannot be empty.", parent=card.winfo_toplevel())
+                return
+
+            # Basic time format validation
+            time_regex = r"^([01]?[0-9]|2[0-3]):[0-5][0-9]$"
+            if not re.match(time_regex, new_s) or not re.match(time_regex, new_e):
+                messagebox.showwarning("Validation Error", "Times must be in 24-hour HH:MM format (e.g. 08:30).", parent=card.winfo_toplevel())
+                return
+
+            entry["title"] = new_title
+            entry["start"] = new_s
+            entry["start_time"] = new_s
+            entry["end"] = new_e
+            entry["end_time"] = new_e
+
+            if on_action:
+                on_action("save_edit", (task_id, new_title, new_s, new_e))
+            _draw_card_content(card, entry, pillar, dot_label, time_sub_label, compact, allow_actions, on_action, mode="normal")
+
+        def _do_cancel():
+            _draw_card_content(card, entry, pillar, dot_label, time_sub_label, compact, allow_actions, on_action, mode="normal")
+
+        HoverButton(
+            btn_row, hover_bg=PRIMARY_HOVER,
+            text=" 💾 Save Changes ",
+            font=FONT_SMALL, bg=BTN_BG, fg=BTN_FG,
+            relief="flat", padx=10, pady=3, cursor="hand2",
+            command=_do_save,
+        ).pack(side="left", padx=(0, 6))
+
+        HoverButton(
+            btn_row, hover_bg=BTN_SEC_HOVER,
+            text=" ✕ Cancel ",
+            font=FONT_SMALL, bg=BTN_SEC_BG, fg=BTN_SEC_FG,
+            relief="flat", padx=10, pady=3, cursor="hand2",
+            command=_do_cancel,
+        ).pack(side="left")
+
+    # ========================================================
+    # MODE: INLINE NOTE EDIT
+    # ========================================================
+    elif mode == "note":
+        note_hdr = tk.Frame(card, bg=BG_CARD)
+        note_hdr.pack(fill="x", pady=(0, 6))
+        tk.Label(
+            note_hdr, text=f"💬 Task Note for: {title_text}",
+            font=FONT_SUBHEAD, fg=PRIMARY_BLUE, bg=BG_CARD
+        ).pack(side="left")
+
+        n_var = tk.StringVar(value=note_text)
+        n_ent = tk.Entry(card, textvariable=n_var, font=FONT_BODY, bg=ENTRY_BG, fg=ENTRY_FG, relief="flat", highlightbackground=ENTRY_BORDER, highlightthickness=1, width=44)
+        n_ent.pack(fill="x", ipady=3, pady=(2, 8))
+        n_ent.focus_set()
+
+        btn_row = tk.Frame(card, bg=BG_CARD)
+        btn_row.pack(fill="x")
+
+        def _do_save_note():
+            new_note = n_var.get().strip()
+            entry["note"] = new_note
+            if on_action:
+                on_action("save_note", (task_id, new_note))
+            _draw_card_content(card, entry, pillar, dot_label, time_sub_label, compact, allow_actions, on_action, mode="normal")
+
+        def _do_cancel_note():
+            _draw_card_content(card, entry, pillar, dot_label, time_sub_label, compact, allow_actions, on_action, mode="normal")
+
+        HoverButton(
+            btn_row, hover_bg=PRIMARY_HOVER,
+            text=" 💾 Save Note ",
+            font=FONT_SMALL, bg=BTN_BG, fg=BTN_FG,
+            relief="flat", padx=10, pady=3, cursor="hand2",
+            command=_do_save_note,
+        ).pack(side="left", padx=(0, 6))
+
+        HoverButton(
+            btn_row, hover_bg=BTN_SEC_HOVER,
+            text=" ✕ Cancel ",
+            font=FONT_SMALL, bg=BTN_SEC_BG, fg=BTN_SEC_FG,
+            relief="flat", padx=10, pady=3, cursor="hand2",
+            command=_do_cancel_note,
+        ).pack(side="left")
 
 
 # ============================================================
@@ -378,32 +662,38 @@ class DayWiseApp(tk.Tk):
         self.planner = Planner()
 
         self.title("DayWise – Intelligent Daily Planning Dashboard")
-        self.geometry("1380x840")
-        self.minsize(980, 650)
+        self.geometry("1400x860")
+        self.minsize(1000, 680)
         self.configure(bg=BG_MAIN)
 
         self._current_page = None
 
-        # ---- Clarification state ----
-        # These are set while waiting for user to answer clarification questions.
+        # Plan My Day interactive state
+        self._one_time_tasks = []          # list of one-time task dicts
+        self._routine_overrides = []       # list of routine overrides for selected date
+        self._current_generated_plan = None # PlanRecord currently being reviewed
+
+        # Clarification state
         self._clarification_active    = False
         self._clarification_question  = ""
         self._clarification_field     = ""
         self._clarification_title     = ""
-        self._clarification_pending   = []   # parsed tasks preserved between rounds
-        self._clarification_original  = ""   # original raw user input
-        self._clarification_date      = ""   # plan date string
+        self._clarification_pending   = []
+        self._clarification_original  = ""
+        self._clarification_date      = ""
+
+        # Process rollover on boot
+        self.planner.check_date_rollover()
 
         self._build_layout()
         self._show_page("home")
 
     # --------------------------------------------------------
-    # LAYOUT BUILDER
+    # LAYOUT & NAVIGATION
     # --------------------------------------------------------
 
     def _build_layout(self):
         """Build main dark navy sidebar + main content layout."""
-
         self.sidebar = tk.Frame(
             self, bg=BG_SIDEBAR, width=220
         )
@@ -419,7 +709,6 @@ class DayWiseApp(tk.Tk):
 
     def _build_sidebar(self):
         """Populate left dark navy navigation sidebar."""
-
         logo_frame = tk.Frame(self.sidebar, bg=BG_SIDEBAR)
         logo_frame.pack(fill="x", pady=(24, 12), padx=16)
 
@@ -479,20 +768,17 @@ class DayWiseApp(tk.Tk):
         footer.pack(side="bottom", fill="x", pady=16, padx=16)
 
         tk.Label(
-            footer,
-            text=format_date_display(today_str()),
+            footer, text="DayWise v2.0",
             font=FONT_SMALL, fg=FG_SIDEBAR, bg=BG_SIDEBAR,
-            justify="left",
         ).pack(anchor="w")
 
-    # --------------------------------------------------------
-    # PAGE ROUTER
-    # --------------------------------------------------------
+    def _clear_content_frame(self):
+        """Destroys all mounted widgets in content area to eliminate duplicate views."""
+        for widget in self.content.winfo_children():
+            widget.destroy()
 
     def _show_page(self, page_name):
-        """Clear content area and render requested page."""
-
-        # Switching away from plan page resets clarification state
+        """Clear content area and render requested page with single-mount guarantee."""
         if page_name != "plan":
             self._clarification_active = False
 
@@ -508,9 +794,7 @@ class DayWiseApp(tk.Tk):
                     font=FONT_BODY
                 )
 
-        for widget in self.content.winfo_children():
-            widget.destroy()
-
+        self._clear_content_frame()
         self._current_page = page_name
 
         page_builders = {
@@ -529,347 +813,535 @@ class DayWiseApp(tk.Tk):
             builder()
 
     # ========================================================
-    # PAGE: HOME
+    # PAGE: HOME DASHBOARD
     # ========================================================
 
     def _page_home(self):
+        self._clear_content_frame()
+        self.planner.check_date_rollover()
+
         frame = tk.Frame(self.content, bg=BG_MAIN)
         frame.pack(fill="both", expand=True, padx=36, pady=28)
 
         tk.Label(
-            frame, text="Welcome to DayWise",
+            frame,
+            text=f"Welcome back! 👋",
             font=FONT_TITLE, fg=FG_MAIN, bg=BG_MAIN,
         ).pack(anchor="w")
 
+        today_label = format_date_display(today_str())
         tk.Label(
             frame,
-            text="Your intelligent daily planning companion.",
+            text=f"Today is {today_label}. Here is your planning dashboard overview.",
             font=FONT_BODY, fg=FG_MUTED, bg=BG_MAIN,
-        ).pack(anchor="w", pady=(2, 18))
+        ).pack(anchor="w", pady=(2, 16))
 
-        # Quick Action Cards
-        actions = [
-            ("📅  Plan My Day",
-             "Enter natural language tasks and get an intelligent schedule.",
-             "plan"),
-            ("📋  View Today's Plan",
-             "See the schedule generated for today.",
-             "today"),
-            ("📜  History",
-             "Browse and search past plans.",
-             "history"),
-            ("✅  Tasks",
-             "View and manage saved tasks.",
-             "tasks"),
-        ]
+        # Metrics Row
+        stats_row = tk.Frame(frame, bg=BG_MAIN)
+        stats_row.pack(fill="x", pady=(0, 16))
 
-        cards_row = tk.Frame(frame, bg=BG_MAIN)
-        cards_row.pack(fill="x", pady=10)
+        active_plan = self.planner.get_active_today_plan()
+        active_cnt = len(active_plan.get("schedule", [])) if active_plan else 0
+        periods_cnt = len(self.planner.load_routine_periods())
+        future_cnt = len(self.planner.get_all_future_plans())
+        hist_cnt = len(self.planner.get_latest_plans(100))
 
-        for i, (title, desc, page) in enumerate(actions):
-            card = tk.Frame(
-                cards_row, bg=BG_CARD,
-                highlightbackground=BORDER_COLOR, highlightthickness=1,
-                bd=0, padx=16, pady=16, cursor="hand2",
+        def _stat_box(parent, title, value, icon, color="#2563eb", bg_tint="#eff6ff"):
+            box = tk.Frame(
+                parent, bg=bg_tint, padx=16, pady=12,
+                highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0,
             )
-            card.grid(row=0, column=i, padx=6, sticky="nsew")
-            cards_row.columnconfigure(i, weight=1)
+            box.pack(side="left", fill="both", expand=True, padx=4)
+            tk.Label(box, text=f"{icon} {title}", font=FONT_SMALL, fg=FG_MUTED, bg=bg_tint).pack(anchor="w")
+            tk.Label(box, text=str(value), font=("Segoe UI", 20, "bold"), fg=color, bg=bg_tint).pack(anchor="w", pady=(2, 0))
 
-            tk.Label(
-                card, text=title, font=FONT_SUBHEAD,
-                fg=PRIMARY_BLUE, bg=BG_CARD,
-            ).pack(anchor="w")
+        _stat_box(stats_row, "Today's Scheduled Tasks", active_cnt, "📋", color="#16a34a", bg_tint="#dcfce7")
+        _stat_box(stats_row, "Active Routine Periods", periods_cnt, "🔄", color="#2563eb", bg_tint="#eff6ff")
+        _stat_box(stats_row, "Future Confirmed Plans", future_cnt, "📅", color="#0369a1", bg_tint="#e0f2fe")
+        _stat_box(stats_row, "Completed History Days", hist_cnt, "📜", color="#475569", bg_tint="#f1f5f9")
 
-            tk.Label(
-                card, text=desc, font=FONT_SMALL,
-                fg=FG_MUTED, bg=BG_CARD,
-                wraplength=190, justify="left",
-            ).pack(anchor="w", pady=(6, 0))
+        # Quick Actions Card
+        act_card = tk.Frame(
+            frame, bg=BG_CARD,
+            highlightbackground=BORDER_COLOR, highlightthickness=1,
+            bd=0, padx=20, pady=18,
+        )
+        act_card.pack(fill="x", pady=(0, 16))
 
-            card.bind("<Button-1>", lambda e, p=page: self._show_page(p))
-            for child in card.winfo_children():
-                child.bind("<Button-1>", lambda e, p=page: self._show_page(p))
+        tk.Label(act_card, text="⚡ Quick Actions", font=FONT_HEADING, fg=FG_MAIN, bg=BG_CARD).pack(anchor="w", pady=(0, 10))
 
-        # Latest schedule preview section
-        tk.Label(
-            frame, text="Latest Schedule Preview",
-            font=FONT_HEADING, fg=FG_MAIN, bg=BG_MAIN,
-        ).pack(anchor="w", pady=(24, 8))
+        actions_box = tk.Frame(act_card, bg=BG_CARD)
+        actions_box.pack(fill="x")
 
-        preview = ScrollableFrame(frame, bg=BG_MAIN)
-        preview.pack(fill="both", expand=True)
+        HoverButton(
+            actions_box, hover_bg=PRIMARY_HOVER,
+            text="  📅  Plan Today / Future Day  ",
+            font=FONT_SUBHEAD, bg=BTN_BG, fg=BTN_FG,
+            relief="flat", padx=14, pady=8, cursor="hand2",
+            command=lambda: self._show_page("plan"),
+        ).pack(side="left", padx=(0, 10))
 
-        today_records = self.planner.get_today_plan()
-        render_schedule(preview.inner, today_records, bg=BG_MAIN, compact=True)
+        HoverButton(
+            actions_box, hover_bg=BTN_SEC_HOVER,
+            text="  📋  View Today's Execution  ",
+            font=FONT_SUBHEAD, bg=BTN_SEC_BG, fg=BTN_SEC_FG,
+            relief="flat", padx=14, pady=8, cursor="hand2",
+            command=lambda: self._show_page("today"),
+        ).pack(side="left", padx=(0, 10))
+
+        HoverButton(
+            actions_box, hover_bg=BTN_SEC_HOVER,
+            text="  🔄  Routine Periods & Habits  ",
+            font=FONT_SUBHEAD, bg=BTN_SEC_BG, fg=BTN_SEC_FG,
+            relief="flat", padx=14, pady=8, cursor="hand2",
+            command=lambda: self._show_page("routines"),
+        ).pack(side="left")
 
     # ========================================================
-    # PAGE: PLAN MY DAY
+    # PAGE: PLAN MY DAY (DATE SELECTION + ROUTINES + ONE-TIME + NLP)
     # ========================================================
 
     def _page_plan(self):
+        self._clear_content_frame()
         frame = tk.Frame(self.content, bg=BG_MAIN)
         frame.pack(fill="both", expand=True, padx=36, pady=28)
 
+        # Header Row
+        header_row = tk.Frame(frame, bg=BG_MAIN)
+        header_row.pack(fill="x", pady=(0, 6))
+
         tk.Label(
-            frame, text="Plan My Day",
+            header_row, text="Plan My Day 📅",
             font=FONT_TITLE, fg=FG_MAIN, bg=BG_MAIN,
-        ).pack(anchor="w")
+        ).pack(side="left")
 
-        tk.Label(
-            frame,
-            text="Type your tasks in natural language. Separate multiple tasks with commas or 'and'.",
-            font=FONT_BODY, fg=FG_MUTED, bg=BG_MAIN,
-        ).pack(anchor="w", pady=(2, 14))
+        # Scrollable workspace
+        scroll = ScrollableFrame(frame, bg=BG_MAIN)
+        scroll.pack(fill="both", expand=True, pady=(6, 0))
+        body = scroll.inner
 
-        # ---- Input card ----
-        input_card = tk.Frame(
-            frame, bg=BG_CARD,
+        # --- Card 1: Date Selector ---
+        date_card = tk.Frame(
+            body, bg=BG_CARD,
             highlightbackground=BORDER_COLOR, highlightthickness=1,
-            bd=0, padx=16, pady=14,
+            bd=0, padx=16, pady=12,
         )
-        input_card.pack(fill="x", pady=(0, 14))
-
-        hint = 'Example: "I have college tomorrow. I want to exercise and have breakfast before college."'
-        tk.Label(
-            input_card, text=hint,
-            font=FONT_SMALL, fg=FG_MUTED, bg=BG_CARD,
-            wraplength=800, justify="left",
-        ).pack(anchor="w", pady=(0, 8))
-
-        self._input_text = tk.Text(
-            input_card, height=4, width=80,
-            font=FONT_BODY,
-            bg=ENTRY_BG, fg=ENTRY_FG,
-            highlightbackground=ENTRY_BORDER, highlightthickness=1,
-            relief="flat", padx=10, pady=8,
-            wrap="word",
-        )
-        self._input_text.pack(fill="x", pady=(0, 10))
-        self._input_text.focus_set()
-
-        date_row = tk.Frame(input_card, bg=BG_CARD)
-        date_row.pack(anchor="w", pady=(0, 10))
+        date_card.pack(fill="x", pady=(0, 12))
 
         tk.Label(
-            date_row, text="Plan for date (YYYY-MM-DD):",
-            font=FONT_BODY, fg=FG_MUTED, bg=BG_CARD,
-        ).pack(side="left", padx=(0, 8))
+            date_card, text="📅 Select Planning Date:",
+            font=FONT_SUBHEAD, fg=FG_MAIN, bg=BG_CARD,
+        ).pack(side="left", padx=(0, 10))
 
-        self._plan_date_var = tk.StringVar(value=today_str())
+        if not hasattr(self, "_plan_date_var") or not self._plan_date_var.get():
+            self._plan_date_var = tk.StringVar(value=today_str())
+
         date_entry = tk.Entry(
-            date_row, textvariable=self._plan_date_var,
+            date_card, textvariable=self._plan_date_var,
             font=FONT_BODY, bg=ENTRY_BG, fg=ENTRY_FG,
             highlightbackground=ENTRY_BORDER, highlightthickness=1,
             relief="flat", width=14,
         )
-        date_entry.pack(side="left")
+        date_entry.pack(side="left", padx=(0, 8), ipady=3)
 
-        btn_row = tk.Frame(input_card, bg=BG_CARD)
-        btn_row.pack(anchor="w")
+        def _set_date(d_str):
+            self._plan_date_var.set(d_str)
+            self._one_time_tasks.clear()
+            self._routine_overrides.clear()
+            self._current_generated_plan = None
+            self._refresh_applicable_routines_display()
 
-        plan_btn = HoverButton(
-            btn_row, hover_bg=PRIMARY_HOVER,
-            text="  📅  Generate My Plan  ",
-            font=FONT_SUBHEAD,
-            bg=BTN_BG, fg=BTN_FG,
-            relief="flat", padx=16, pady=8, cursor="hand2",
-            command=self._run_plan,
+        HoverButton(date_card, hover_bg=BTN_SEC_HOVER, text="Today", font=FONT_SMALL, bg=BTN_SEC_BG, fg=BTN_SEC_FG, relief="flat", padx=8, pady=3, cursor="hand2", command=lambda: _set_date(today_str())).pack(side="left", padx=2)
+        HoverButton(date_card, hover_bg=BTN_SEC_HOVER, text="Tomorrow", font=FONT_SMALL, bg=BTN_SEC_BG, fg=BTN_SEC_FG, relief="flat", padx=8, pady=3, cursor="hand2", command=lambda: _set_date(tomorrow_str())).pack(side="left", padx=2)
+        HoverButton(date_card, hover_bg=PRIMARY_HOVER, text="Load Date", font=FONT_SMALL, bg=BTN_BG, fg=BTN_FG, relief="flat", padx=8, pady=3, cursor="hand2", command=lambda: _set_date(self._plan_date_var.get().strip())).pack(side="left", padx=6)
+
+        # --- Card 2: Applicable Routines for this Day ---
+        self._routines_box = tk.Frame(
+            body, bg=BG_CARD,
+            highlightbackground=BORDER_COLOR, highlightthickness=1,
+            bd=0, padx=16, pady=12,
         )
-        plan_btn.pack(side="left", padx=(0, 10))
+        self._routines_box.pack(fill="x", pady=(0, 12))
 
-        clear_btn = HoverButton(
-            btn_row, hover_bg=BTN_SEC_HOVER,
-            text="  ✕  Clear  ",
-            font=FONT_BODY,
-            bg=BTN_SEC_BG, fg=BTN_SEC_FG,
-            relief="flat", padx=10, pady=8, cursor="hand2",
-            command=self._clear_plan_input,
+        # --- Card 3: Date-Specific One-Time Tasks ---
+        onetime_card = tk.Frame(
+            body, bg=BG_CARD,
+            highlightbackground=BORDER_COLOR, highlightthickness=1,
+            bd=0, padx=16, pady=12,
         )
-        clear_btn.pack(side="left")
-
-        self._plan_status = tk.Label(
-            frame, text="", font=FONT_BODY,
-            fg="#166534", bg=BG_MAIN,
-        )
-        self._plan_status.pack(anchor="w", pady=(0, 6))
-
-        # ---- Clarification Panel (hidden until needed) ----
-        self._clarif_panel = tk.Frame(
-            frame, bg="#fffbeb",
-            highlightbackground="#fbbf24", highlightthickness=2,
-            bd=0, padx=20, pady=18,
-        )
-        # Not packed initially — shown only when clarification is needed
-
-        clarif_header = tk.Frame(self._clarif_panel, bg="#fffbeb")
-        clarif_header.pack(fill="x", pady=(0, 8))
+        onetime_card.pack(fill="x", pady=(0, 12))
 
         tk.Label(
-            clarif_header,
-            text="🤔  DayWise needs a little more information",
-            font=FONT_SUBHEAD, fg="#92400e", bg="#fffbeb",
-        ).pack(side="left")
+            onetime_card, text="➕ Add One-Time Tasks for this Date",
+            font=FONT_SUBHEAD, fg=FG_MAIN, bg=BG_CARD,
+        ).pack(anchor="w", pady=(0, 6))
 
-        self._clarif_question_label = tk.Label(
-            self._clarif_panel,
-            text="",
-            font=FONT_BODY, fg=FG_MAIN, bg="#fffbeb",
-            wraplength=700, justify="left",
+        ot_form = tk.Frame(onetime_card, bg=BG_CARD)
+        ot_form.pack(fill="x", pady=(0, 8))
+
+        tk.Label(ot_form, text="Task Name:", font=FONT_SMALL, fg=FG_MUTED, bg=BG_CARD).grid(row=0, column=0, sticky="w")
+        tk.Label(ot_form, text="Duration (min):", font=FONT_SMALL, fg=FG_MUTED, bg=BG_CARD).grid(row=0, column=1, sticky="w", padx=6)
+        tk.Label(ot_form, text="Deadline (opt):", font=FONT_SMALL, fg=FG_MUTED, bg=BG_CARD).grid(row=0, column=2, sticky="w", padx=6)
+        tk.Label(ot_form, text="Priority:", font=FONT_SMALL, fg=FG_MUTED, bg=BG_CARD).grid(row=0, column=3, sticky="w", padx=6)
+
+        ot_title_var = tk.StringVar()
+        ot_dur_var = tk.StringVar(value="60")
+        ot_dl_var = tk.StringVar()
+        ot_prio_var = tk.StringVar(value="normal")
+
+        tk.Entry(ot_form, textvariable=ot_title_var, font=FONT_BODY, bg=ENTRY_BG, fg=ENTRY_FG, highlightbackground=ENTRY_BORDER, highlightthickness=1, relief="flat", width=30).grid(row=1, column=0, sticky="w", ipady=3)
+        tk.Entry(ot_form, textvariable=ot_dur_var, font=FONT_BODY, bg=ENTRY_BG, fg=ENTRY_FG, highlightbackground=ENTRY_BORDER, highlightthickness=1, relief="flat", width=12).grid(row=1, column=1, sticky="w", padx=6, ipady=3)
+        tk.Entry(ot_form, textvariable=ot_dl_var, font=FONT_BODY, bg=ENTRY_BG, fg=ENTRY_FG, highlightbackground=ENTRY_BORDER, highlightthickness=1, relief="flat", width=14).grid(row=1, column=2, sticky="w", padx=6, ipady=3)
+
+        prio_cb = ttk.Combobox(ot_form, textvariable=ot_prio_var, values=["very high", "high", "normal", "low"], width=10, state="readonly")
+        prio_cb.grid(row=1, column=3, sticky="w", padx=6, ipady=2)
+
+        def _add_onetime():
+            t = ot_title_var.get().strip()
+            if not t:
+                messagebox.showwarning("Missing Title", "Please enter a task title.", parent=self)
+                return
+            try:
+                dur = int(ot_dur_var.get().strip() or "60")
+            except ValueError:
+                dur = 60
+            dl = ot_dl_var.get().strip() or None
+            prio = ot_prio_var.get()
+
+            self._one_time_tasks.append({
+                "title": t,
+                "duration": dur,
+                "deadline": dl,
+                "priority": prio,
+                "source": "one-time",
+                "type": "task",
+                "status": "pending",
+                "note": "",
+            })
+            ot_title_var.set("")
+            ot_dl_var.set("")
+            self._refresh_onetime_display(onetime_card)
+
+        HoverButton(ot_form, hover_bg=PRIMARY_HOVER, text=" + Add Task ", font=FONT_SMALL, bg=BTN_BG, fg=BTN_FG, relief="flat", padx=10, pady=3, cursor="hand2", command=_add_onetime).grid(row=1, column=4, sticky="w", padx=8)
+
+        self._onetime_list_frame = tk.Frame(onetime_card, bg=BG_CARD)
+        self._onetime_list_frame.pack(fill="x", pady=(4, 0))
+
+        # --- Card 4: Natural Language Conversational Input ---
+        nlp_card = tk.Frame(
+            body, bg=BG_CARD,
+            highlightbackground=BORDER_COLOR, highlightthickness=1,
+            bd=0, padx=16, pady=12,
         )
-        self._clarif_question_label.pack(anchor="w", pady=(0, 10))
+        nlp_card.pack(fill="x", pady=(0, 12))
 
-        self._clarif_answer_var = tk.StringVar()
-        clarif_entry = tk.Entry(
-            self._clarif_panel,
-            textvariable=self._clarif_answer_var,
-            font=("Segoe UI", 13),
-            bg=ENTRY_BG, fg=ENTRY_FG,
-            highlightbackground="#fbbf24", highlightthickness=2,
-            relief="flat", width=28,
+        tk.Label(
+            nlp_card, text="💬 Natural Language Instructions (Optional):",
+            font=FONT_SUBHEAD, fg=FG_MAIN, bg=BG_CARD,
+        ).pack(anchor="w", pady=(0, 4))
+
+        tk.Label(
+            nlp_card, text='e.g. "I have a meeting at 3 PM and need to study Python for 2 hours before that"',
+            font=FONT_SMALL, fg=FG_MUTED, bg=BG_CARD,
+        ).pack(anchor="w", pady=(0, 6))
+
+        self._input_text = tk.Text(
+            nlp_card, height=3, width=80,
+            font=FONT_BODY, bg=ENTRY_BG, fg=ENTRY_FG,
+            highlightbackground=ENTRY_BORDER, highlightthickness=1,
+            relief="flat", padx=10, pady=8, wrap="word",
         )
-        clarif_entry.pack(anchor="w", ipady=6, pady=(0, 10))
-        clarif_entry.bind("<Return>", lambda e: self._submit_clarification())
-        self._clarif_entry_widget = clarif_entry
+        self._input_text.pack(fill="x", pady=(0, 8))
 
-        clarif_btn_row = tk.Frame(self._clarif_panel, bg="#fffbeb")
-        clarif_btn_row.pack(anchor="w")
+        # Action row: Generate Plan
+        gen_row = tk.Frame(body, bg=BG_MAIN)
+        gen_row.pack(fill="x", pady=(4, 10))
 
         HoverButton(
-            clarif_btn_row, hover_bg=PRIMARY_HOVER,
-            text="  Continue  ➜  ",
-            font=FONT_SUBHEAD,
-            bg=BTN_BG, fg=BTN_FG,
-            relief="flat", padx=16, pady=8, cursor="hand2",
-            command=self._submit_clarification,
+            gen_row, hover_bg=PRIMARY_HOVER,
+            text="  📅  Generate My Plan  ",
+            font=FONT_SUBHEAD, bg=BTN_BG, fg=BTN_FG,
+            relief="flat", padx=18, pady=10, cursor="hand2",
+            command=self._execute_generate_plan,
         ).pack(side="left", padx=(0, 10))
 
         HoverButton(
-            clarif_btn_row, hover_bg=BTN_SEC_HOVER,
-            text="  Cancel  ",
-            font=FONT_BODY,
-            bg=BTN_SEC_BG, fg=BTN_SEC_FG,
-            relief="flat", padx=10, pady=8, cursor="hand2",
-            command=self._cancel_clarification,
+            gen_row, hover_bg=BTN_SEC_HOVER,
+            text="  ✕  Clear All  ",
+            font=FONT_BODY, bg=BTN_SEC_BG, fg=BTN_SEC_FG,
+            relief="flat", padx=12, pady=10, cursor="hand2",
+            command=self._clear_plan_inputs,
         ).pack(side="left")
 
-        # ---- Results section ----
+        self._plan_status = tk.Label(
+            body, text="", font=FONT_BODY, fg="#166534", bg=BG_MAIN,
+        )
+        self._plan_status.pack(anchor="w", pady=(0, 8))
+
+        # Clarification Panel
+        self._clarif_panel = tk.Frame(
+            body, bg="#fffbeb", highlightbackground="#fbbf24", highlightthickness=2, bd=0, padx=20, pady=16,
+        )
+        tk.Label(self._clarif_panel, text="🤔 DayWise needs clarification", font=FONT_SUBHEAD, fg="#92400e", bg="#fffbeb").pack(anchor="w", pady=(0, 4))
+        self._clarif_question_label = tk.Label(self._clarif_panel, text="", font=FONT_BODY, fg=FG_MAIN, bg="#fffbeb", wraplength=700, justify="left")
+        self._clarif_question_label.pack(anchor="w", pady=(0, 8))
+        self._clarif_answer_var = tk.StringVar()
+        self._clarif_entry_widget = tk.Entry(self._clarif_panel, textvariable=self._clarif_answer_var, font=("Segoe UI", 12), bg=ENTRY_BG, fg=ENTRY_FG, highlightbackground="#fbbf24", highlightthickness=1, relief="flat", width=28)
+        self._clarif_entry_widget.pack(anchor="w", ipady=4, pady=(0, 8))
+        self._clarif_entry_widget.bind("<Return>", lambda e: self._submit_clarification())
+
+        c_btns = tk.Frame(self._clarif_panel, bg="#fffbeb")
+        c_btns.pack(anchor="w")
+        HoverButton(c_btns, hover_bg=PRIMARY_HOVER, text=" Continue ➜ ", font=FONT_SMALL, bg=BTN_BG, fg=BTN_FG, relief="flat", padx=12, pady=6, cursor="hand2", command=self._submit_clarification).pack(side="left", padx=(0, 6))
+        HoverButton(c_btns, hover_bg=BTN_SEC_HOVER, text=" Cancel ", font=FONT_SMALL, bg=BTN_SEC_BG, fg=BTN_SEC_FG, relief="flat", padx=10, pady=6, cursor="hand2", command=self._cancel_clarification).pack(side="left")
+
+        # Review & Confirmation Section
+        self._review_section = tk.Frame(body, bg=BG_MAIN)
+        self._review_section.pack(fill="both", expand=True, pady=(6, 0))
+
+        # Initial render of routines
+        self._refresh_applicable_routines_display()
+
+    def _refresh_applicable_routines_display(self):
+        """Refreshes applicable routines for the selected date with INLINE override editing."""
+        for w in self._routines_box.winfo_children():
+            w.destroy()
+
+        sel_date = self._plan_date_var.get().strip() or today_str()
+        weekday = get_weekday_name(sel_date)
+        period = self.planner.data_manager.get_active_routine_period_for_date(sel_date)
+        period_title = f" ({period.get('name')})" if period else " (Default Recurring)"
+
         tk.Label(
-            frame, text="Generated Schedule:",
-            font=FONT_HEADING, fg=FG_MAIN, bg=BG_MAIN,
-        ).pack(anchor="w", pady=(4, 6))
+            self._routines_box,
+            text=f"🔄 Applicable Routines for {weekday}, {sel_date}{period_title}",
+            font=FONT_SUBHEAD, fg=FG_MAIN, bg=BG_CARD,
+        ).pack(anchor="w", pady=(0, 6))
 
-        result_frame = ScrollableFrame(frame, bg=BG_MAIN)
-        result_frame.pack(fill="both", expand=True)
-        self._plan_result_frame = result_frame.inner
+        routines = self.planner.get_routines_for_date(sel_date)
 
-        # If clarification was already active when we re-rendered the page
-        if self._clarification_active:
-            self._show_clarification_panel(
-                self._clarification_question,
-            )
-
-    # --------------------------------------------------------
-    # PLAN EXECUTION
-    # --------------------------------------------------------
-
-    def _clear_plan_input(self):
-        self._input_text.delete("1.0", "end")
-        self._cancel_clarification()
-
-    def _run_plan(self):
-        """Execute planning pipeline and display results or clarification prompt."""
-        raw_input = self._input_text.get("1.0", "end").strip()
-        plan_date = self._plan_date_var.get().strip() or today_str()
-
-        if not raw_input:
-            self._plan_status.config(
-                text="⚠ Please enter at least one task.",
-                fg="#9a3412",
-            )
+        if not routines:
+            tk.Label(
+                self._routines_box,
+                text="No routines configured for this weekday. You can create routine periods in the Routines tab.",
+                font=FONT_SMALL, fg=FG_MUTED, bg=BG_CARD,
+            ).pack(anchor="w")
             return
 
-        # Reset any previous clarification state
-        self._cancel_clarification(silent=True)
+        for r in routines:
+            row = tk.Frame(self._routines_box, bg=PRIMARY_LIGHT, padx=10, pady=6, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0)
+            row.pack(fill="x", pady=3)
+            self._draw_applicable_routine_row(row, r, sel_date, mode="normal")
 
-        self._plan_status.config(
-            text="⏳ Generating schedule...", fg=FG_MUTED
-        )
+    def _draw_applicable_routine_row(self, row, r, sel_date, mode="normal"):
+        for w in row.winfo_children():
+            w.destroy()
+
+        name = r.get("name") or r.get("title", "Routine")
+        start = r.get("start") or r.get("start_time", "08:00")
+        dur = r.get("duration", 60)
+        is_overridden = any(ro.get("name") == name for ro in self._routine_overrides)
+
+        if mode == "normal":
+            tk.Label(row, text=f"🔄 {name}", font=FONT_SUBHEAD, fg=FG_MAIN, bg=PRIMARY_LIGHT).pack(side="left", padx=(0, 8))
+            tk.Label(row, text=f"{format_12h(start)} ({dur} min)", font=FONT_BODY, fg=FG_MUTED, bg=PRIMARY_LIGHT).pack(side="left", padx=(0, 8))
+
+            if is_overridden:
+                tk.Label(row, text=" OVERRIDE ", font=("Segoe UI", 7, "bold"), fg="#92400e", bg="#fef3c7", padx=4, pady=1).pack(side="left")
+            else:
+                tk.Label(row, text=" ROUTINE ", font=("Segoe UI", 7, "bold"), fg="#0369a1", bg="#e0f2fe", padx=4, pady=1).pack(side="left")
+
+            HoverButton(
+                row, hover_bg=BTN_SEC_HOVER,
+                text=" ✎ Override for this day ",
+                font=FONT_SMALL, bg=BTN_SEC_BG, fg=BTN_SEC_FG,
+                relief="flat", padx=8, pady=2, cursor="hand2",
+                command=lambda: self._draw_applicable_routine_row(row, r, sel_date, mode="edit"),
+            ).pack(side="right")
+
+        elif mode == "edit":
+            tk.Label(row, text=f"Override '{name}' for {sel_date}:", font=FONT_SMALL, fg=PRIMARY_BLUE, bg=PRIMARY_LIGHT).pack(side="left", padx=(0, 6))
+
+            tk.Label(row, text="Start:", font=FONT_SMALL, fg=FG_MUTED, bg=PRIMARY_LIGHT).pack(side="left")
+            st_var = tk.StringVar(value=start)
+            st_ent = tk.Entry(row, textvariable=st_var, font=FONT_SMALL, width=8)
+            st_ent.pack(side="left", padx=2)
+
+            tk.Label(row, text="Duration (min):", font=FONT_SMALL, fg=FG_MUTED, bg=PRIMARY_LIGHT).pack(side="left", padx=(4, 0))
+            dur_var = tk.StringVar(value=str(dur))
+            dur_ent = tk.Entry(row, textvariable=dur_var, font=FONT_SMALL, width=5)
+            dur_ent.pack(side="left", padx=2)
+
+            def _apply():
+                st = st_var.get().strip()
+                try:
+                    d = int(dur_var.get().strip())
+                except ValueError:
+                    d = 60
+                self._routine_overrides = [ro for ro in self._routine_overrides if ro.get("name") != name]
+                self._routine_overrides.append({
+                    "routine_id": r.get("routine_id"),
+                    "name": name,
+                    "title": name,
+                    "start_time": st,
+                    "start": st,
+                    "duration": d,
+                    "enabled": True,
+                })
+                r["start"] = st
+                r["start_time"] = st
+                r["duration"] = d
+                self._draw_applicable_routine_row(row, r, sel_date, mode="normal")
+
+            def _cancel():
+                self._draw_applicable_routine_row(row, r, sel_date, mode="normal")
+
+            HoverButton(row, hover_bg=PRIMARY_HOVER, text=" Apply ", font=FONT_SMALL, bg=BTN_BG, fg=BTN_FG, relief="flat", padx=8, pady=2, cursor="hand2", command=_apply).pack(side="left", padx=4)
+            HoverButton(row, hover_bg=BTN_SEC_HOVER, text=" Cancel ", font=FONT_SMALL, bg=BTN_SEC_BG, fg=BTN_SEC_FG, relief="flat", padx=6, pady=2, cursor="hand2", command=_cancel).pack(side="left")
+
+    def _refresh_onetime_display(self, container):
+        """Refreshes one-time task card rows with inline remove."""
+        for w in self._onetime_list_frame.winfo_children():
+            w.destroy()
+
+        if not self._one_time_tasks:
+            return
+
+        for idx, ot in enumerate(self._one_time_tasks):
+            r = tk.Frame(self._onetime_list_frame, bg="#faf5ff", padx=10, pady=5, highlightbackground="#f3e8ff", highlightthickness=1, bd=0)
+            r.pack(fill="x", pady=2)
+
+            tk.Label(r, text=f"📌 {ot['title']}", font=FONT_SUBHEAD, fg="#6b21a8", bg="#faf5ff").pack(side="left", padx=(0, 6))
+            tk.Label(r, text=f"({ot['duration']} min | Priority: {ot['priority']})", font=FONT_SMALL, fg=FG_MUTED, bg="#faf5ff").pack(side="left")
+            tk.Label(r, text=" ONE-TIME ", font=("Segoe UI", 7, "bold"), fg="#86198f", bg="#fae8ff", padx=4, pady=1).pack(side="left", padx=6)
+
+            def _remove(i=idx):
+                self._one_time_tasks.pop(i)
+                self._refresh_onetime_display(container)
+
+            HoverButton(r, hover_bg="#fecaca", text=" Remove ", font=FONT_SMALL, bg=BTN_DANGER_BG, fg=BTN_DANGER_FG, relief="flat", padx=6, pady=1, cursor="hand2", command=_remove).pack(side="right")
+
+    def _clear_plan_inputs(self):
+        self._input_text.delete("1.0", "end")
+        self._one_time_tasks.clear()
+        self._routine_overrides.clear()
+        self._current_generated_plan = None
+        self._cancel_clarification(silent=True)
+        self._refresh_applicable_routines_display()
+        for w in self._onetime_list_frame.winfo_children():
+            w.destroy()
+        for w in self._review_section.winfo_children():
+            w.destroy()
+        self._plan_status.config(text="")
+
+    def _execute_generate_plan(self):
+        """Generates the plan from routines, overrides, one-time tasks, and NLP input."""
+        plan_date = self._plan_date_var.get().strip() or today_str()
+        raw_text = self._input_text.get("1.0", "end").strip()
+
+        self._plan_status.config(text="⏳ Generating schedule...", fg=FG_MUTED)
         self.update_idletasks()
 
         try:
-            result = self.planner.plan(raw_input, plan_date)
+            result = self.planner.generate_date_plan(
+                plan_date=plan_date,
+                one_time_tasks=self._one_time_tasks,
+                routine_overrides=self._routine_overrides,
+                raw_input=raw_text,
+            )
         except Exception as exc:
-            self._plan_status.config(
-                text=f"❌ Error: {exc}", fg="#991b1b"
-            )
+            self._plan_status.config(text=f"❌ Error: {exc}", fg="#991b1b")
             return
 
-        self._handle_plan_result(result, raw_input, plan_date)
-
-    def _handle_plan_result(self, result, raw_input, plan_date):
-        """Common handler for both first-call and continue-call plan results."""
         if result.get("needs_clarification"):
-            # Store clarification state
-            self._clarification_active   = True
-            self._clarification_question = result["question"]
-            self._clarification_field    = result["field"]
-            self._clarification_title    = result["task_title"]
-            self._clarification_pending  = result.get("pending_tasks", [])
-            self._clarification_original = result.get("original_input", raw_input)
-            self._clarification_date     = result.get("plan_date", plan_date)
-
-            self._plan_status.config(
-                text="💬 Please answer the question below to continue.",
-                fg="#92400e",
-            )
-            self._show_clarification_panel(result["question"])
+            self._handle_plan_result(result, raw_text, plan_date)
             return
 
-        # Clear clarification state on success
-        self._cancel_clarification(silent=True)
+        self._current_generated_plan = result
+        self._render_plan_review_and_confirm(result)
 
-        if result.get("error"):
-            self._plan_status.config(
-                text=f"⚠ {result['error']}", fg="#9a3412"
-            )
-            return
+    def _render_plan_review_and_confirm(self, plan_data):
+        """Renders generated plan in editable review state with prominent Confirm button."""
+        for w in self._review_section.winfo_children():
+            w.destroy()
 
-        schedule = result.get("schedule", [])
-        task_count = len(result.get("tasks", []))
+        schedule = plan_data.get("schedule", [])
+        plan_date = plan_data.get("date", today_str())
+
+        rev_card = tk.Frame(
+            self._review_section, bg=BG_CARD,
+            highlightbackground=BORDER_COLOR, highlightthickness=1,
+            bd=0, padx=18, pady=16,
+        )
+        rev_card.pack(fill="x", pady=(10, 0))
+
+        # Top confirmation bar
+        top_bar = tk.Frame(rev_card, bg=BG_CARD)
+        top_bar.pack(fill="x", pady=(0, 12))
+
+        title_box = tk.Frame(top_bar, bg=BG_CARD)
+        title_box.pack(side="left")
+
+        tk.Label(title_box, text=f"📋 Review Generated Schedule ({format_date_display(plan_date)})", font=FONT_HEADING, fg=FG_MAIN, bg=BG_CARD).pack(anchor="w")
+        tk.Label(title_box, text="Review schedule below, then click Confirm Plan to activate.", font=FONT_SMALL, fg=FG_MUTED, bg=BG_CARD).pack(anchor="w")
+
+        # Prominent CONFIRM PLAN Button
+        def _on_confirm():
+            try:
+                res = self.planner.confirm_plan(self._current_generated_plan)
+                if res.get("status") == "active":
+                    messagebox.showinfo(
+                        "Plan Confirmed",
+                        f"Today's Plan for {plan_date} has been confirmed and is now ACTIVE!\n\n"
+                        "You can now track execution and task completion in Today's Plan tab.",
+                        parent=self,
+                    )
+                    self._show_page("today")
+                elif res.get("status") == "future_confirmed":
+                    messagebox.showinfo(
+                        "Future Plan Confirmed",
+                        f"Plan for {plan_date} has been confirmed and stored as a FUTURE CONFIRMED PLAN.\n\n"
+                        f"It will automatically become Today's Active Plan when {plan_date} arrives.",
+                        parent=self,
+                    )
+                    self._show_page("memory")
+            except Exception as e:
+                messagebox.showerror("Confirmation Error", str(e), parent=self)
+
+        HoverButton(
+            top_bar, hover_bg=BTN_SUCCESS_HOVER,
+            text="  🚀  CONFIRM PLAN  ",
+            font=("Segoe UI", 12, "bold"), bg=BTN_SUCCESS_BG, fg="#ffffff",
+            relief="flat", padx=18, pady=8, cursor="hand2",
+            command=_on_confirm,
+        ).pack(side="right")
+
+        # Render schedule timeline
+        sched_box = tk.Frame(rev_card, bg=BG_CARD)
+        sched_box.pack(fill="x", pady=6)
+        render_schedule(sched_box, schedule, bg=BG_CARD, compact=False)
 
         self._plan_status.config(
-            text=(
-                f"✅ Schedule generated successfully — "
-                f"{len(schedule)} entries, "
-                f"{task_count} task(s) saved."
-            ),
+            text=f"✅ Generated {len(schedule)} schedule items for {plan_date}. Review above and click Confirm Plan.",
             fg="#166534",
         )
 
-        render_schedule(
-            self._plan_result_frame, schedule, bg=BG_MAIN
-        )
-
     # --------------------------------------------------------
-    # CLARIFICATION PANEL HELPERS
+    # CLARIFICATION PANEL LOGIC
     # --------------------------------------------------------
 
     def _show_clarification_panel(self, question):
-        """Show the clarification panel with the given question."""
-        if not hasattr(self, "_clarif_panel"):
-            return
-        self._clarif_question_label.config(text=question)
-        self._clarif_answer_var.set("")
-        self._clarif_panel.pack(fill="x", pady=(0, 14), before=self._plan_result_frame.master)
-        self._clarif_entry_widget.focus_set()
+        if hasattr(self, "_clarif_panel"):
+            self._clarif_question_label.config(text=question)
+            self._clarif_answer_var.set("")
+            self._clarif_panel.pack(fill="x", pady=(0, 12))
+            self._clarif_entry_widget.focus_set()
 
     def _hide_clarification_panel(self):
-        """Hide the clarification panel."""
         if hasattr(self, "_clarif_panel"):
             self._clarif_panel.pack_forget()
 
     def _cancel_clarification(self, silent=False):
-        """Reset all clarification state."""
         self._clarification_active   = False
         self._clarification_question = ""
         self._clarification_field    = ""
@@ -882,13 +1354,9 @@ class DayWiseApp(tk.Tk):
             self._plan_status.config(text="", fg="#166534")
 
     def _submit_clarification(self):
-        """User clicked Continue after answering a clarification question."""
         answer = self._clarif_answer_var.get().strip()
         if not answer:
-            self._plan_status.config(
-                text="⚠ Please enter an answer before continuing.",
-                fg="#9a3412",
-            )
+            messagebox.showwarning("Clarification", "Please enter an answer.", parent=self)
             return
 
         field     = self._clarification_field
@@ -896,9 +1364,6 @@ class DayWiseApp(tk.Tk):
         pending   = self._clarification_pending
         original  = self._clarification_original
         plan_date = self._clarification_date
-
-        self._plan_status.config(text="⏳ Processing...", fg=FG_MUTED)
-        self.update_idletasks()
 
         try:
             result = self.planner.continue_plan(
@@ -910,22 +1375,45 @@ class DayWiseApp(tk.Tk):
                 task_title=task_title,
             )
         except Exception as exc:
-            self._plan_status.config(
-                text=f"❌ Error: {exc}", fg="#991b1b"
-            )
+            self._plan_status.config(text=f"❌ Error: {exc}", fg="#991b1b")
             return
 
-        self._handle_plan_result(result, original, plan_date)
+        if result.get("needs_clarification"):
+            self._handle_plan_result(result, original, plan_date)
+        else:
+            self._cancel_clarification(silent=True)
+            self._current_generated_plan = result
+            self._render_plan_review_and_confirm(result)
+
+    def _handle_plan_result(self, result, raw_input, plan_date):
+        if result.get("needs_clarification"):
+            self._clarification_active   = True
+            self._clarification_question = result["question"]
+            self._clarification_field    = result["field"]
+            self._clarification_title    = result["task_title"]
+            self._clarification_pending  = result.get("pending_tasks", [])
+            self._clarification_original = result.get("original_input", raw_input)
+            self._clarification_date     = result.get("plan_date", plan_date)
+            self._show_clarification_panel(result["question"])
+        else:
+            self._cancel_clarification(silent=True)
+            self._current_generated_plan = result
+            self._render_plan_review_and_confirm(result)
 
     # ========================================================
-    # PAGE: TODAY'S PLAN  (Rich Visual Timeline Dashboard)
+    # PAGE: TODAY'S PLAN  (Live Execution Dashboard)
     # ========================================================
 
     def _page_today(self):
+        self._clear_content_frame()
+        self.planner.check_date_rollover()
+
         frame = tk.Frame(self.content, bg=BG_MAIN)
         frame.pack(fill="both", expand=True, padx=36, pady=28)
 
-        # Header Row
+        active_plan = self.planner.get_active_today_plan()
+
+        # Top Bar
         top_bar = tk.Frame(frame, bg=BG_MAIN)
         top_bar.pack(fill="x", pady=(0, 6))
 
@@ -934,936 +1422,927 @@ class DayWiseApp(tk.Tk):
 
         tk.Label(
             title_box,
-            text="Good Morning! 👋",
+            text="Today's Execution Dashboard 📋",
             font=FONT_TITLE, fg=FG_MAIN, bg=BG_MAIN,
         ).pack(anchor="w")
 
+        today_label = format_date_display(today_str())
         tk.Label(
             title_box,
-            text="Here's your personalized plan for today.",
+            text=f"Active daily execution plan for {today_label}.",
             font=FONT_BODY, fg=FG_MUTED, bg=BG_MAIN,
         ).pack(anchor="w", pady=(2, 0))
 
         right_box = tk.Frame(top_bar, bg=BG_MAIN)
         right_box.pack(side="right")
 
-        date_pill = tk.Label(
-            right_box,
-            text=f" 📅 Today, {format_date_display(today_str())} ",
-            font=("Segoe UI", 9, "bold"), fg="#1e40af", bg="#dbeafe",
-            padx=10, pady=5,
-        )
-        date_pill.pack(side="left", padx=(0, 8))
+        if active_plan:
+            tk.Label(
+                right_box,
+                text=" 🟢 ACTIVE PLAN ",
+                font=("Segoe UI", 9, "bold"), fg="#166534", bg="#dcfce7",
+                padx=10, pady=5,
+            ).pack(side="left", padx=(0, 8))
+
+            def _finalize_day_action():
+                if messagebox.askyesno(
+                    "Finalize Day",
+                    "Are you sure you want to finalize today's plan?\n\n"
+                    "This will move today's plan to permanent History as a finalized record.",
+                    parent=self,
+                ):
+                    self.planner.finalize_active_day()
+                    messagebox.showinfo("Day Finalized", "Today's plan has been finalized and saved to History.", parent=self)
+                    self._show_page("history")
+
+            HoverButton(
+                right_box, hover_bg=PRIMARY_HOVER,
+                text=" 🔒 Finalize Day ",
+                font=FONT_SMALL, bg=BTN_BG, fg=BTN_FG,
+                relief="flat", padx=10, pady=5, cursor="hand2",
+                command=_finalize_day_action,
+            ).pack(side="left", padx=(0, 6))
 
         HoverButton(
             right_box, hover_bg=BTN_SEC_HOVER,
             text=" 🔄 Refresh ",
-            font=FONT_BODY,
-            bg=BTN_SEC_BG, fg=BTN_SEC_FG,
-            relief="flat", padx=10, pady=4, cursor="hand2",
+            font=FONT_SMALL, bg=BTN_SEC_BG, fg=BTN_SEC_FG,
+            relief="flat", padx=8, pady=5, cursor="hand2",
             command=self._page_today,
         ).pack(side="left")
 
-        ttk.Separator(frame, orient="horizontal").pack(
-            fill="x", pady=12
-        )
+        ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=12)
 
-        schedule = self.planner.get_today_plan()
+        if not active_plan:
+            empty_box = tk.Frame(
+                frame, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0, padx=30, pady=40,
+            )
+            empty_box.pack(fill="both", expand=True, pady=10)
+
+            tk.Label(empty_box, text="No Active Plan Confirmed for Today", font=FONT_TITLE, fg=FG_MAIN, bg=BG_CARD).pack(pady=(0, 8))
+            tk.Label(
+                empty_box,
+                text="You haven't confirmed a plan for today yet.\nGo to Plan My Day to load your routines and create today's plan.",
+                font=FONT_BODY, fg=FG_MUTED, bg=BG_CARD, justify="center",
+            ).pack(pady=(0, 16))
+
+            HoverButton(
+                empty_box, hover_bg=PRIMARY_HOVER,
+                text="  📅  Plan Today's Schedule  ",
+                font=FONT_SUBHEAD, bg=BTN_BG, fg=BTN_FG,
+                relief="flat", padx=18, pady=10, cursor="hand2",
+                command=lambda: self._show_page("plan"),
+            ).pack()
+            return
+
+        # Active Schedule Execution View
+        schedule = active_plan.get("schedule", [])
 
         dashboard_row = tk.Frame(frame, bg=BG_MAIN)
         dashboard_row.pack(fill="both", expand=True)
-
         dashboard_row.columnconfigure(0, weight=3)
         dashboard_row.columnconfigure(1, weight=1)
         dashboard_row.rowconfigure(0, weight=1)
 
-        # --- Left Column: Rich Visual Timeline ---
         left_col = tk.Frame(dashboard_row, bg=BG_MAIN)
         left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
-
-        tk.Label(
-            left_col, text="🕒 Your Daily Schedule",
-            font=FONT_HEADING, fg=FG_MAIN, bg=BG_MAIN,
-        ).pack(anchor="w", pady=(0, 8))
 
         scroll = ScrollableFrame(left_col, bg=BG_MAIN)
         scroll.pack(fill="both", expand=True)
 
-        render_schedule(scroll.inner, schedule, bg=BG_MAIN)
+        def _on_task_action(action, data):
+            if action == "complete":
+                self.planner.update_active_task(data, status="completed")
+                self._page_today()
+            elif action == "incomplete":
+                self.planner.update_active_task(data, status="not_completed")
+                self._page_today()
+            elif action == "save_note":
+                tid, note_str = data
+                self.planner.update_active_task(tid, note=note_str)
+                self._page_today()
+            elif action == "save_edit":
+                tid, title_str, start_str, end_str = data
+                self.planner.update_active_task(tid, title=title_str, start_time=start_str, end_time=end_str)
+                self._page_today()
 
-        # --- Right Column: Summary Card Dashboard ---
-        right_col = tk.Frame(
-            dashboard_row, bg=BG_CARD,
-            highlightbackground=BORDER_COLOR, highlightthickness=1,
-            bd=0, padx=18, pady=18,
-        )
+        render_schedule(scroll.inner, schedule, bg=BG_MAIN, allow_actions=True, on_action=_on_task_action)
+
+        # Right Summary Column (Progress Overview)
+        right_col = tk.Frame(dashboard_row, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0, padx=18, pady=18)
         right_col.grid(row=0, column=1, sticky="nsew")
 
-        tk.Label(
-            right_col, text="📊 Day Overview",
-            font=FONT_HEADING, fg=FG_MAIN, bg=BG_CARD,
-        ).pack(anchor="w", pady=(0, 14))
+        tk.Label(right_col, text="📊 Progress Overview", font=FONT_HEADING, fg=FG_MAIN, bg=BG_CARD).pack(anchor="w", pady=(0, 12))
 
-        # Unique schedule metrics calculation
-        seen_keys = set()
-        unique_schedule = []
-        for e in schedule:
-            key = ((e.get("title") or "").strip().lower(), e.get("start"), e.get("end"))
-            if key not in seen_keys:
-                seen_keys.add(key)
-                unique_schedule.append(e)
+        completed_cnt = sum(1 for e in schedule if e.get("status") == "completed")
+        not_comp_cnt = sum(1 for e in schedule if e.get("status") in ("not_completed", "not completed"))
+        pending_cnt = sum(1 for e in schedule if e.get("status", "pending") == "pending")
+        total_cnt = len(schedule)
 
-        total_items = len(unique_schedule)
-        tasks_count = sum(1 for e in unique_schedule if e.get("type") == "task")
-        routines_count = sum(1 for e in unique_schedule if e.get("type") == "routine")
-        breaks_count = sum(1 for e in unique_schedule if e.get("type") == "break")
+        def _met(parent, title, val, color="#2563eb", bg_tint="#eff6ff"):
+            box = tk.Frame(parent, bg=bg_tint, padx=12, pady=8, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0)
+            box.pack(fill="x", pady=4)
+            tk.Label(box, text=title, font=FONT_SMALL, fg=FG_MUTED, bg=bg_tint).pack(anchor="w")
+            tk.Label(box, text=str(val), font=("Segoe UI", 16, "bold"), fg=color, bg=bg_tint).pack(anchor="w")
 
-        total_minutes = 0
-        for e in unique_schedule:
-            if "start" in e and "end" in e:
-                try:
-                    s_m = time_to_minutes(e["start"])
-                    e_m = time_to_minutes(e["end"])
-                    if e_m > s_m:
-                        total_minutes += (e_m - s_m)
-                except Exception:
-                    pass
-        hours = total_minutes // 60
-        mins = total_minutes % 60
-        time_display = f"{hours}h {mins}m" if hours > 0 else f"{mins}m"
-
-        def _metric_box(parent, title, val, color="#2563eb", bg_tint="#eff6ff"):
-            box = tk.Frame(
-                parent, bg=bg_tint, padx=12, pady=10,
-                highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0
-            )
-            box.pack(fill="x", pady=5)
-            tk.Label(
-                box, text=title, font=FONT_SMALL, fg=FG_MUTED, bg=bg_tint
-            ).pack(anchor="w")
-            tk.Label(
-                box, text=str(val), font=("Segoe UI", 16, "bold"), fg=color, bg=bg_tint
-            ).pack(anchor="w", pady=(2, 0))
-
-        _metric_box(right_col, "Total Unique Activities", total_items, PRIMARY_BLUE, "#eff6ff")
-        _metric_box(right_col, "Total Scheduled Time", time_display, "#0369a1", "#e0f2fe")
-        _metric_box(right_col, "Tasks Planned", tasks_count, "#3730a3", "#e0e7ff")
-        _metric_box(right_col, "Routines & Breaks", f"{routines_count} routines, {breaks_count} breaks", "#475569", "#f1f5f9")
+        _met(right_col, "Total Scheduled Items", total_cnt, color="#475569", bg_tint="#f1f5f9")
+        _met(right_col, "Completed Tasks", completed_cnt, color="#166534", bg_tint="#dcfce7")
+        _met(right_col, "Pending Tasks", pending_cnt, color="#854d0e", bg_tint="#fef9c3")
+        _met(right_col, "Incomplete Tasks", not_comp_cnt, color="#991b1b", bg_tint="#fee2e2")
 
     # ========================================================
-    # PAGE: HISTORY
+    # PAGE: HISTORY (IMMUTABLE BY DEFAULT + AUDITED HISTORICAL EDITS)
     # ========================================================
 
     def _page_history(self):
+        self._clear_content_frame()
+        self.planner.check_date_rollover()
+
         frame = tk.Frame(self.content, bg=BG_MAIN)
         frame.pack(fill="both", expand=True, padx=36, pady=28)
 
         tk.Label(
-            frame, text="History",
+            frame, text="History & Past Plans 📜",
             font=FONT_TITLE, fg=FG_MAIN, bg=BG_MAIN,
         ).pack(anchor="w")
 
         tk.Label(
-            frame, text="View your past days of planned schedules. All records are permanently preserved.",
+            frame, text="View completed historical days. Historical records are read-only by default and preserve complete audit trails.",
             font=FONT_SMALL, fg=FG_MUTED, bg=BG_MAIN,
         ).pack(anchor="w", pady=(2, 10))
 
-        # Search Bar Card  ← EXACT REQUIRED LABEL: "🔍 Search past plans"
-        search_card = tk.Frame(
-            frame, bg=BG_CARD,
-            highlightbackground=BORDER_COLOR, highlightthickness=1,
-            bd=0, padx=14, pady=10,
-        )
+        # Search Bar Card
+        search_card = tk.Frame(frame, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0, padx=14, pady=10)
         search_card.pack(fill="x", pady=(0, 12))
 
-        tk.Label(
-            search_card,
-            text="🔍 Search past plans",
-            font=FONT_SUBHEAD, fg=FG_MAIN, bg=BG_CARD,
-        ).pack(side="left", padx=(0, 10))
-
+        tk.Label(search_card, text="🔍 Search past plans", font=FONT_SUBHEAD, fg=FG_MAIN, bg=BG_CARD).pack(side="left", padx=(0, 10))
         self._hist_search_var = tk.StringVar()
-        search_entry = tk.Entry(
-            search_card,
-            textvariable=self._hist_search_var,
-            font=FONT_BODY, bg=ENTRY_BG, fg=ENTRY_FG,
-            highlightbackground=ENTRY_BORDER, highlightthickness=1,
-            relief="flat", width=28,
-        )
+        search_entry = tk.Entry(search_card, textvariable=self._hist_search_var, font=FONT_BODY, bg=ENTRY_BG, fg=ENTRY_FG, highlightbackground=ENTRY_BORDER, highlightthickness=1, relief="flat", width=28)
         search_entry.pack(side="left", padx=(0, 8), ipady=3)
 
-        HoverButton(
-            search_card, hover_bg=PRIMARY_HOVER,
-            text="Search",
-            font=FONT_BODY, bg=BTN_BG, fg=BTN_FG,
-            relief="flat", padx=12, pady=4, cursor="hand2",
-            command=self._history_search,
-        ).pack(side="left", padx=(0, 6))
+        HoverButton(search_card, hover_bg=PRIMARY_HOVER, text="Search", font=FONT_BODY, bg=BTN_BG, fg=BTN_FG, relief="flat", padx=12, pady=4, cursor="hand2", command=self._history_search).pack(side="left", padx=4)
+        HoverButton(search_card, hover_bg=BTN_SEC_HOVER, text="Show All", font=FONT_BODY, bg=BTN_SEC_BG, fg=BTN_SEC_FG, relief="flat", padx=10, pady=4, cursor="hand2", command=self._page_history).pack(side="left")
 
-        HoverButton(
-            search_card, hover_bg=BTN_SEC_HOVER,
-            text="Show All",
-            font=FONT_BODY, bg=BTN_SEC_BG, fg=BTN_SEC_FG,
-            relief="flat", padx=10, pady=4, cursor="hand2",
-            command=self._history_show_all,
-        ).pack(side="left")
+        self._history_list_container = ScrollableFrame(frame, bg=BG_MAIN)
+        self._history_list_container.pack(fill="both", expand=True)
 
-        paned = tk.Frame(frame, bg=BG_MAIN)
-        paned.pack(fill="both", expand=True)
+        records = self.planner.get_latest_plans(30)
+        self._render_history_records(records)
 
-        list_frame = tk.Frame(
-            paned, bg=BG_CARD, width=250,
-            highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0
-        )
-        list_frame.pack(side="left", fill="y", padx=(0, 10))
-        list_frame.pack_propagate(False)
+    def _render_history_records(self, records):
+        """Renders list of historical day cards with audit trail details and controlled edit buttons."""
+        parent = self._history_list_container.inner
+        for w in parent.winfo_children():
+            w.destroy()
 
-        tk.Label(
-            list_frame, text="Last 10 Days",
-            font=FONT_SUBHEAD, fg=FG_MAIN, bg=BG_CARD,
-        ).pack(anchor="w", padx=12, pady=10)
+        if not records:
+            card = tk.Frame(parent, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0, padx=20, pady=30)
+            card.pack(fill="x", pady=10)
+            tk.Label(card, text="No history records found.", font=FONT_BODY, fg=FG_MUTED, bg=BG_CARD).pack()
+            return
 
-        self._hist_listbox = tk.Listbox(
-            list_frame, font=FONT_BODY,
-            bg=BG_CARD, fg=FG_MAIN,
-            selectbackground=PRIMARY_BLUE,
-            selectforeground="#ffffff",
-            relief="flat", bd=0,
-            activestyle="none",
-        )
-        self._hist_listbox.pack(
-            fill="both", expand=True, padx=4, pady=(0, 6)
-        )
-        self._hist_listbox.bind(
-            "<<ListboxSelect>>", self._on_history_select
-        )
+        for record in reversed(records):
+            rec_date = record.get("date", "Unknown Date")
+            created = record.get("created_at", "")
+            finalized = record.get("finalized_at", created)
+            sched = record.get("schedule", [])
+            is_edited = record.get("is_edited", False)
+            audit_trail = record.get("audit_trail", [])
 
-        detail_outer = tk.Frame(paned, bg=BG_MAIN)
-        detail_outer.pack(
-            side="left", fill="both", expand=True
-        )
+            card = tk.Frame(parent, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0, padx=16, pady=14)
+            card.pack(fill="x", pady=8)
 
-        self._hist_detail_label = tk.Label(
-            detail_outer, text="Select a plan to view details",
-            font=FONT_SUBHEAD, fg=FG_MUTED, bg=BG_MAIN,
-        )
-        self._hist_detail_label.pack(anchor="w", pady=(0, 6))
+            # Header line
+            hdr = tk.Frame(card, bg=BG_CARD)
+            hdr.pack(fill="x", pady=(0, 8))
 
-        detail_scroll = ScrollableFrame(
-            detail_outer, bg=BG_MAIN
-        )
-        detail_scroll.pack(fill="both", expand=True)
-        self._hist_detail_inner = detail_scroll.inner
+            date_label = format_date_display(rec_date)
+            tk.Label(hdr, text=f"📅 {date_label}", font=FONT_HEADING, fg=PRIMARY_BLUE, bg=BG_CARD).pack(side="left")
 
-        self._hist_records = []
-        self._history_show_all()
+            if is_edited:
+                tk.Label(hdr, text=" [EDITED HISTORICAL RECORD] ", font=("Segoe UI", 8, "bold"), fg="#92400e", bg="#fef3c7", padx=6, pady=2).pack(side="left", padx=8)
 
-    def _history_show_all(self):
-        records = self.planner.get_latest_plans(10)
-        self._populate_history_list(records)
+            tk.Label(hdr, text=f"Finalized: {finalized}", font=FONT_SMALL, fg=FG_MUTED, bg=BG_CARD).pack(side="left", padx=8)
+
+            # Controlled Historical Edit button (preserves strict audit rule: confirmation + mandatory note)
+            def _open_historical_edit(pdate=rec_date, r_dict=record):
+                # Step 1: Confirmation
+                if not messagebox.askyesno(
+                    "Historical Edit Confirmation",
+                    "You are about to modify a completed historical record.\n\n"
+                    "This action will create an immutable audit trail entry with your mandatory note.\n\n"
+                    "Do you want to continue?",
+                    parent=self,
+                ):
+                    return
+
+                # Step 2: Modal for audited edit with MANDATORY note
+                dlg = tk.Toplevel(self)
+                dlg.title(f"Controlled Historical Edit – {pdate}")
+                dlg.geometry("440x360")
+                dlg.configure(bg=BG_MAIN)
+
+                tk.Label(dlg, text=f"Edit Historical Record for {pdate}", font=FONT_HEADING, fg=FG_MAIN, bg=BG_MAIN).pack(pady=10)
+
+                f = tk.Frame(dlg, bg=BG_MAIN, padx=20)
+                f.pack(fill="both", expand=True)
+
+                task_options = [e.get("title", f"Task {i}") for i, e in enumerate(r_dict.get("schedule", []))]
+                if not task_options:
+                    task_options = ["(No tasks)"]
+
+                tk.Label(f, text="Select Task:", font=FONT_SMALL, fg=FG_MAIN, bg=BG_MAIN).pack(anchor="w")
+                task_choice_var = tk.StringVar(value=task_options[0])
+                ttk.Combobox(f, textvariable=task_choice_var, values=task_options, state="readonly", width=34).pack(fill="x", pady=4)
+
+                tk.Label(f, text="New Status:", font=FONT_SMALL, fg=FG_MAIN, bg=BG_MAIN).pack(anchor="w", pady=(6, 0))
+                status_var = tk.StringVar(value="completed")
+                ttk.Combobox(f, textvariable=status_var, values=["completed", "not_completed", "pending"], state="readonly", width=34).pack(fill="x", pady=4)
+
+                tk.Label(f, text="Mandatory Edit Reason / Note (*REQUIRED):", font=("Segoe UI", 9, "bold"), fg="#991b1b", bg=BG_MAIN).pack(anchor="w", pady=(8, 0))
+                note_var = tk.StringVar()
+                n_ent = tk.Entry(f, textvariable=note_var, font=FONT_BODY, bg=ENTRY_BG, fg=ENTRY_FG, relief="flat", highlightbackground=ENTRY_BORDER, highlightthickness=1)
+                n_ent.pack(fill="x", ipady=4, pady=4)
+
+                def _save_hist_edit():
+                    reason = note_var.get().strip()
+                    if not reason:
+                        messagebox.showerror("Validation Error", "A non-empty note is MANDATORY for historical edits.", parent=dlg)
+                        return
+
+                    t_name = task_choice_var.get()
+                    st = status_var.get()
+
+                    try:
+                        self.planner.edit_historical_record(
+                            plan_date=pdate,
+                            task_id=t_name,
+                            changes={"status": st},
+                            mandatory_note=reason,
+                        )
+                        messagebox.showinfo("Historical Edit Saved", "Historical record updated and audit trail preserved.", parent=dlg)
+                        dlg.destroy()
+                        self._page_history()
+                    except Exception as err:
+                        messagebox.showerror("Error", str(err), parent=dlg)
+
+                HoverButton(dlg, hover_bg=PRIMARY_HOVER, text=" Confirm & Save Audit Record ", font=FONT_SUBHEAD, bg=BTN_BG, fg=BTN_FG, relief="flat", padx=14, pady=6, cursor="hand2", command=_save_hist_edit).pack(pady=12)
+
+            HoverButton(hdr, hover_bg=BTN_SEC_HOVER, text=" ✎ Edit Historical Task ", font=FONT_SMALL, bg=BTN_SEC_BG, fg=BTN_SEC_FG, relief="flat", padx=8, pady=3, cursor="hand2", command=_open_historical_edit).pack(side="right")
+
+            # Render schedule
+            sched_frame = tk.Frame(card, bg=BG_CARD)
+            sched_frame.pack(fill="x")
+            render_schedule(sched_frame, sched, bg=BG_CARD, compact=True)
+
+            # Audit Trail Box
+            if audit_trail:
+                audit_box = tk.Frame(card, bg="#fffbeb", padx=12, pady=8, highlightbackground="#fde68a", highlightthickness=1, bd=0)
+                audit_box.pack(fill="x", pady=(10, 0))
+                tk.Label(audit_box, text="📋 Historical Edit Audit Trail:", font=("Segoe UI", 9, "bold"), fg="#92400e", bg="#fffbeb").pack(anchor="w")
+                for a in audit_trail:
+                    tk.Label(
+                        audit_box,
+                        text=f"• [{a.get('edited_at')}] Task: {a.get('task_title')} | Reason: \"{a.get('edit_reason')}\"",
+                        font=FONT_SMALL, fg=FG_MAIN, bg="#fffbeb",
+                    ).pack(anchor="w")
 
     def _history_search(self):
         query = self._hist_search_var.get().strip()
         if not query:
-            self._history_show_all()
+            self._page_history()
             return
-        records = self.planner.search_history(query)
-        self._populate_history_list(records)
-
-    def _populate_history_list(self, records):
-        self._hist_records = records
-        self._hist_listbox.delete(0, "end")
-
-        if not records:
-            self._hist_listbox.insert("end", "  No records found.")
-            render_schedule(self._hist_detail_inner, [], bg=BG_MAIN)
-            return
-
-        for rec in records:
-            label = (
-                f"  📅 {rec.get('date', '?')} "
-                f"({len(rec.get('schedule', []))} items)"
-            )
-            self._hist_listbox.insert("end", label)
-
-    def _on_history_select(self, _event):
-        sel = self._hist_listbox.curselection()
-        if not sel:
-            return
-        idx = sel[0]
-        if idx >= len(self._hist_records):
-            return
-        record = self._hist_records[idx]
-        date_label = format_date_display(
-            record.get("date", "")
-        )
-        self._hist_detail_label.config(
-            text=f"Schedule for {date_label}",
-            fg=FG_MAIN,
-        )
-        render_schedule(
-            self._hist_detail_inner,
-            record.get("schedule", []),
-            bg=BG_MAIN,
-        )
+        results = self.planner.search_history(query)
+        self._render_history_records(results)
 
     # ========================================================
-    # PAGE: TASKS
+    # PAGE: TASKS (PERSISTENT TASK STORAGE)
     # ========================================================
 
     def _page_tasks(self):
+        self._clear_content_frame()
         frame = tk.Frame(self.content, bg=BG_MAIN)
         frame.pack(fill="both", expand=True, padx=36, pady=28)
 
-        tk.Label(
-            frame, text="Task Manager",
-            font=FONT_TITLE, fg=FG_MAIN, bg=BG_MAIN,
-        ).pack(anchor="w")
-
-        tk.Label(
-            frame,
-            text="All tasks saved by DayWise. Click a task row to update its status.",
-            font=FONT_SMALL, fg=FG_MUTED, bg=BG_MAIN,
-        ).pack(anchor="w", pady=(2, 12))
+        tk.Label(frame, text="Persistent Tasks ✅", font=FONT_TITLE, fg=FG_MAIN, bg=BG_MAIN).pack(anchor="w")
+        tk.Label(frame, text="All parsed and manually added tasks across your schedule.", font=FONT_SMALL, fg=FG_MUTED, bg=BG_MAIN).pack(anchor="w", pady=(2, 14))
 
         tasks = self.planner.load_tasks()
+        scroll = ScrollableFrame(frame, bg=BG_MAIN)
+        scroll.pack(fill="both", expand=True)
 
         if not tasks:
-            empty_card = tk.Frame(
-                frame, bg=BG_CARD,
-                highlightbackground=BORDER_COLOR, highlightthickness=1,
-                bd=0, pady=40, padx=20,
-            )
-            empty_card.pack(fill="x", pady=20)
-            tk.Label(
-                empty_card,
-                text="No tasks saved yet.\n\nPlan your day to create tasks.",
-                font=FONT_BODY, fg=FG_MUTED, bg=BG_CARD,
-                justify="center",
-            ).pack()
+            card = tk.Frame(scroll.inner, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0, padx=20, pady=30)
+            card.pack(fill="x", pady=10)
+            tk.Label(card, text="No persistent tasks found.", font=FONT_BODY, fg=FG_MUTED, bg=BG_CARD).pack()
             return
 
-        hdr = tk.Frame(
-            frame, bg=BG_PANEL,
-            highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0,
-            pady=8, padx=12
-        )
-        hdr.pack(fill="x")
+        for t in reversed(tasks):
+            row = tk.Frame(scroll.inner, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0, padx=14, pady=10)
+            row.pack(fill="x", pady=4)
 
-        hdr.columnconfigure(0, weight=3, minsize=200)
-        hdr.columnconfigure(1, weight=1, minsize=90)
-        hdr.columnconfigure(2, weight=1, minsize=80)
-        hdr.columnconfigure(3, weight=1, minsize=80)
-        hdr.columnconfigure(4, weight=1, minsize=90)
-        hdr.columnconfigure(5, weight=1, minsize=100)
+            icon = get_icon_for_title(t.get("title", ""))
+            tk.Label(row, text=f"{icon} {t.get('title', 'Untitled Task')}", font=FONT_SUBHEAD, fg=FG_MAIN, bg=BG_CARD).pack(side="left")
 
-        headers = [
-            ("Title", 0, "w"),
-            ("Date", 1, "w"),
-            ("Duration", 2, "w"),
-            ("Priority", 3, "w"),
-            ("Context", 4, "w"),
-            ("Status", 5, "e"),
-        ]
-        for text, col, sticky in headers:
-            tk.Label(
-                hdr, text=text, font=FONT_SUBHEAD,
-                fg=FG_MAIN, bg=BG_PANEL, anchor=sticky
-            ).grid(row=0, column=col, sticky=sticky, padx=4)
+            st = t.get("status", "pending")
+            if st in BADGE_STYLES:
+                s_bg, s_fg = BADGE_STYLES[st]
+                tk.Label(row, text=f" {st.upper()} ", font=("Segoe UI", 8, "bold"), fg=s_fg, bg=s_bg, padx=6, pady=2).pack(side="right", padx=6)
 
-        scroll = ScrollableFrame(frame, bg=BG_MAIN)
-        scroll.pack(fill="both", expand=True, pady=(0, 8))
-
-        for task in tasks:
-            self._task_row(scroll.inner, task)
-
-    def _task_row(self, parent, task):
-        status = str(task.get("status", "pending")).lower()
-        duration_min = task.get("duration", 0)
-        if duration_min >= 60:
-            h = duration_min // 60
-            m = duration_min % 60
-            duration_str = f"{h}h {m}m" if m > 0 else f"{h}h"
-        else:
-            duration_str = f"{duration_min}m"
-
-        title_text = task.get("title", "?")
-        icon = get_icon_for_title(title_text)
-
-        row = tk.Frame(
-            parent, bg=BG_CARD,
-            highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0,
-            pady=8, padx=12, cursor="hand2"
-        )
-        row.pack(fill="x", padx=2, pady=3)
-
-        row.columnconfigure(0, weight=3, minsize=200)
-        row.columnconfigure(1, weight=1, minsize=90)
-        row.columnconfigure(2, weight=1, minsize=80)
-        row.columnconfigure(3, weight=1, minsize=80)
-        row.columnconfigure(4, weight=1, minsize=90)
-        row.columnconfigure(5, weight=1, minsize=100)
-
-        # Title
-        tk.Label(
-            row, text=f"{icon} {title_text}",
-            font=FONT_BODY, fg=FG_MAIN, bg=BG_CARD, anchor="w"
-        ).grid(row=0, column=0, sticky="w", padx=4)
-
-        # Date
-        tk.Label(
-            row, text=str(task.get("date", "-")),
-            font=FONT_BODY, fg=FG_MUTED, bg=BG_CARD, anchor="w"
-        ).grid(row=0, column=1, sticky="w", padx=4)
-
-        # Duration
-        tk.Label(
-            row, text=duration_str,
-            font=FONT_BODY, fg=FG_MUTED, bg=BG_CARD, anchor="w"
-        ).grid(row=0, column=2, sticky="w", padx=4)
-
-        # Priority
-        p_val = str(task.get("priority", "normal")).upper()
-        p_color = "#ef4444" if p_val == "HIGH" else "#3b82f6" if p_val == "MEDIUM" else FG_MUTED
-        tk.Label(
-            row, text=p_val,
-            font=("Segoe UI", 9, "bold"), fg=p_color, bg=BG_CARD, anchor="w"
-        ).grid(row=0, column=3, sticky="w", padx=4)
-
-        # Context
-        c_val = str(task.get("context", "-")).capitalize()
-        tk.Label(
-            row, text=c_val,
-            font=FONT_BODY, fg=FG_MUTED, bg=BG_CARD, anchor="w"
-        ).grid(row=0, column=4, sticky="w", padx=4)
-
-        # Status badge
-        s_bg, s_fg = BADGE_STYLES.get(status, ("#f1f5f9", "#475569"))
-        s_badge = tk.Label(
-            row, text=f" {status.upper()} ",
-            font=("Segoe UI", 8, "bold"), fg=s_fg, bg=s_bg,
-            padx=8, pady=3,
-        )
-        s_badge.grid(row=0, column=5, sticky="e", padx=4)
-
-        row.bind("<Button-1>", lambda e, t=task: self._status_dialog(t))
-        for child in row.winfo_children():
-            child.bind("<Button-1>", lambda e, t=task: self._status_dialog(t))
-
-    def _status_dialog(self, task):
-        dlg = tk.Toplevel(self)
-        dlg.title("Update Task Status")
-        dlg.configure(bg=BG_MAIN)
-        dlg.geometry("360x250")
-        dlg.resizable(False, False)
-
-        tk.Label(
-            dlg,
-            text=truncate(task.get("title", "Task"), 38),
-            font=FONT_SUBHEAD, fg=FG_MAIN, bg=BG_MAIN,
-        ).pack(pady=(16, 4))
-
-        tk.Label(
-            dlg, text="Set new status:",
-            font=FONT_BODY, fg=FG_MUTED, bg=BG_MAIN,
-        ).pack()
-
-        status_var = tk.StringVar(
-            value=task.get("status", "pending")
-        )
-
-        for s in ("pending", "scheduled", "completed", "cancelled"):
-            tk.Radiobutton(
-                dlg, text=s.capitalize(),
-                variable=status_var, value=s,
-                font=FONT_BODY, fg=FG_MAIN,
-                bg=BG_MAIN, activebackground=BG_MAIN,
-                selectcolor=PRIMARY_LIGHT,
-            ).pack(anchor="w", padx=50, pady=2)
-
-        def _apply():
-            new_status = status_var.get()
-            task_id = task.get("task_id")
-            if task_id:
-                self.planner.update_task_status(task_id, new_status)
-            dlg.destroy()
-            self._show_page("tasks")
-
-        HoverButton(
-            dlg, hover_bg=PRIMARY_HOVER,
-            text="  Apply Status  ",
-            font=FONT_BODY, bg=BTN_BG, fg=BTN_FG,
-            relief="flat", padx=12, pady=6, cursor="hand2",
-            command=_apply,
-        ).pack(pady=14)
+            tk.Label(row, text=f"Duration: {t.get('duration', 60)} min", font=FONT_SMALL, fg=FG_MUTED, bg=BG_CARD).pack(side="right", padx=6)
 
     # ========================================================
-    # PAGE: ROUTINES (Rich Routine Card Design)
+    # PAGE: ROUTINES (ROUTINE PERIODS + MON-SUN MAPS + GLOBAL ROUTINES)
     # ========================================================
 
     def _page_routines(self):
+        self._clear_content_frame()
         frame = tk.Frame(self.content, bg=BG_MAIN)
         frame.pack(fill="both", expand=True, padx=36, pady=28)
 
         top_row = tk.Frame(frame, bg=BG_MAIN)
         top_row.pack(fill="x", pady=(0, 6))
 
-        tk.Label(
-            top_row, text="Routine Management",
-            font=FONT_TITLE, fg=FG_MAIN, bg=BG_MAIN,
-        ).pack(side="left")
+        tk.Label(top_row, text="Routine Periods & Habit System 🔄", font=FONT_TITLE, fg=FG_MAIN, bg=BG_MAIN).pack(side="left")
 
         HoverButton(
             top_row, hover_bg=PRIMARY_HOVER,
-            text="  + Add Routine  ",
-            font=FONT_SUBHEAD,
-            bg=BTN_BG, fg=BTN_FG,
+            text="  + Create Routine Period  ",
+            font=FONT_SUBHEAD, bg=BTN_BG, fg=BTN_FG,
             relief="flat", padx=14, pady=6, cursor="hand2",
-            command=self._add_routine_dialog,
+            command=self._create_routine_period_wizard,
         ).pack(side="right")
 
         tk.Label(
             frame,
-            text="Configure recurring daily routines. Active routines automatically block time in your schedule.",
+            text="Define date-bounded routine periods with common task libraries and independent Monday–Sunday daily overrides.",
             font=FONT_SMALL, fg=FG_MUTED, bg=BG_MAIN,
         ).pack(anchor="w", pady=(0, 14))
 
-        routines = self.planner.load_routines()
         scroll = ScrollableFrame(frame, bg=BG_MAIN)
-        scroll.pack(fill="both", expand=True, pady=(0, 8))
+        scroll.pack(fill="both", expand=True)
+        body = scroll.inner
 
-        if not routines:
-            empty_card = tk.Frame(
-                scroll.inner, bg=BG_CARD,
-                highlightbackground=BORDER_COLOR, highlightthickness=1,
-                bd=0, pady=40, padx=20,
-            )
-            empty_card.pack(fill="x", pady=20)
-            tk.Label(
-                empty_card,
-                text="No routines defined yet.\n\nClick '+ Add Routine' above to create one.",
-                font=FONT_BODY, fg=FG_MUTED, bg=BG_CARD,
-                justify="center",
-            ).pack()
+        # --- Section 1: Routine Periods ---
+        tk.Label(body, text="📅 Active Routine Periods", font=FONT_HEADING, fg=FG_MAIN, bg=BG_MAIN).pack(anchor="w", pady=(0, 8))
+
+        periods = self.planner.load_routine_periods()
+        if not periods:
+            c = tk.Frame(body, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0, padx=16, pady=16)
+            c.pack(fill="x", pady=(0, 14))
+            tk.Label(c, text="No custom routine periods defined yet. Click '+ Create Routine Period' above to define your semester or work routine.", font=FONT_BODY, fg=FG_MUTED, bg=BG_CARD).pack()
         else:
-            for r in routines:
-                self._render_routine_row(scroll.inner, r)
+            for p in periods:
+                self._render_routine_period_card(body, p)
 
-    def _render_routine_row(self, parent, r):
-        """Renders routine as a rich dashboard card matching reference design."""
-        row = tk.Frame(
-            parent, bg=BG_CARD,
-            highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0,
-            pady=12, padx=16,
-        )
-        row.pack(fill="x", expand=True, padx=4, pady=6)
+        ttk.Separator(body, orient="horizontal").pack(fill="x", pady=16)
+
+        # --- Section 2: Legacy / Global Default Routines ---
+        leg_row = tk.Frame(body, bg=BG_MAIN)
+        leg_row.pack(fill="x", pady=(0, 8))
+
+        tk.Label(leg_row, text="🔁 Global Recurring Daily Routines", font=FONT_HEADING, fg=FG_MAIN, bg=BG_MAIN).pack(side="left")
+
+        HoverButton(
+            leg_row, hover_bg=BTN_SEC_HOVER,
+            text=" + Add Global Routine ",
+            font=FONT_SMALL, bg=BTN_SEC_BG, fg=BTN_SEC_FG,
+            relief="flat", padx=10, pady=3, cursor="hand2",
+            command=self._add_legacy_routine_dialog,
+        ).pack(side="right")
+
+        legacy_routines = self.planner.load_routines()
+        for r in legacy_routines:
+            self._render_legacy_routine_row(body, r)
+
+    def _render_routine_period_card(self, parent, p):
+        card = tk.Frame(parent, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0, padx=16, pady=14)
+        card.pack(fill="x", pady=6)
+
+        hdr = tk.Frame(card, bg=BG_CARD)
+        hdr.pack(fill="x")
+
+        tk.Label(hdr, text=f"🗓️ {p.get('name')}", font=FONT_HEADING, fg=PRIMARY_BLUE, bg=BG_CARD).pack(side="left")
+        tk.Label(hdr, text=f" ({p.get('start_date')} → {p.get('end_date')})", font=FONT_SUBHEAD, fg=FG_MUTED, bg=BG_CARD).pack(side="left")
+
+        pid = p.get("period_id")
+
+        def _delete_p(period_id=pid):
+            if messagebox.askyesno("Delete Routine Period", "Are you sure you want to delete this routine period?", parent=self):
+                self.planner.delete_routine_period(period_id)
+                self._page_routines()
+
+        HoverButton(hdr, hover_bg=BTN_DANGER_HOVER, text=" Delete Period ", font=FONT_SMALL, bg=BTN_DANGER_BG, fg=BTN_DANGER_FG, relief="flat", padx=8, pady=2, cursor="hand2", command=_delete_p).pack(side="right")
+
+        # Mon-Sun Summary Grid
+        days_box = tk.Frame(card, bg=BG_PANEL, padx=10, pady=8, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0)
+        days_box.pack(fill="x", pady=(10, 0))
+
+        days_cfg = p.get("days_config", {})
+        for day in DAYS_OF_WEEK:
+            items = [it.get("name") for it in days_cfg.get(day, []) if it.get("enabled", True)]
+            summary_str = ", ".join(items) if items else "No routines"
+            d_row = tk.Frame(days_box, bg=BG_PANEL)
+            d_row.pack(fill="x", pady=1)
+            tk.Label(d_row, text=f"{day[:3]}:", font=("Segoe UI", 9, "bold"), fg=FG_MAIN, bg=BG_PANEL, width=5, anchor="w").pack(side="left")
+            tk.Label(d_row, text=summary_str, font=FONT_SMALL, fg=FG_MUTED, bg=BG_PANEL).pack(side="left")
+
+    def _render_legacy_routine_row(self, parent, r):
+        """Renders global routine card with INLINE EDITING support."""
+        row = tk.Frame(parent, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0, pady=10, padx=14)
+        row.pack(fill="x", pady=4)
+        self._draw_legacy_routine_row(row, r, mode="normal")
+
+    def _draw_legacy_routine_row(self, row, r, mode="normal"):
+        for w in row.winfo_children():
+            w.destroy()
 
         name = r.get("name") or r.get("title", "Routine")
         start = r.get("start") or r.get("start_time", "00:00")
         end = r.get("end") or r.get("end_time", "00:00")
-        start_12 = format_12h(start)
-        end_12 = format_12h(end)
-        time_str = f"{start_12} – {end_12}"
         active = r.get("enabled", r.get("active", True))
         rid = r.get("routine_id") or name
         icon = get_icon_for_title(name, etype="routine")
 
-        # Top line: Icon + Routine Name + Status Badge
-        header_line = tk.Frame(row, bg=BG_CARD)
-        header_line.pack(fill="x")
+        if mode == "normal":
+            tk.Label(row, text=f"{icon} {name}", font=FONT_SUBHEAD, fg=FG_MAIN, bg=BG_CARD).pack(side="left")
+            tk.Label(row, text=f"  🕒 {format_12h(start)} – {format_12h(end)}", font=FONT_BODY, fg=FG_MUTED, bg=BG_CARD).pack(side="left")
 
-        tk.Label(
-            header_line, text=f"{icon} ",
-            font=("Segoe UI", 14), bg=BG_CARD
-        ).pack(side="left")
+            status_txt = "Enabled" if active else "Disabled"
+            status_bg = "#dcfce7" if active else "#fee2e2"
+            status_fg = "#166534" if active else "#991b1b"
 
-        tk.Label(
-            header_line, text=name,
-            font=FONT_HEADING, fg=FG_MAIN, bg=BG_CARD,
-        ).pack(side="left")
+            tk.Label(row, text=f" {status_txt} ", font=("Segoe UI", 8, "bold"), fg=status_fg, bg=status_bg, padx=6, pady=2).pack(side="right", padx=6)
 
-        status_txt = "Enabled" if active else "Disabled"
-        status_bg = "#dcfce7" if active else "#fee2e2"
-        status_fg = "#166534" if active else "#991b1b"
+            def _del_rout():
+                if messagebox.askyesno("Delete Routine", f"Are you sure you want to delete '{name}'?", parent=self):
+                    self.planner.data_manager.delete_routine(rid)
+                    self._page_routines()
 
-        tk.Label(
-            header_line, text=f" {status_txt} ",
-            font=("Segoe UI", 8, "bold"), fg=status_fg, bg=status_bg,
-            padx=8, pady=3,
-        ).pack(side="right")
+            HoverButton(row, hover_bg=BTN_DANGER_HOVER, text=" 🗑 Delete ", font=FONT_SMALL, bg=BTN_DANGER_BG, fg=BTN_DANGER_FG, relief="flat", padx=6, pady=2, cursor="hand2", command=_del_rout).pack(side="right", padx=(4, 0))
 
-        # Subtitle line: Time & Recurrence Days
-        days = r.get("days", [])
-        days_str = ", ".join(days) if days and len(days) < 7 else "Everyday (Monday – Sunday)"
-        
-        info_line = tk.Frame(row, bg=BG_CARD)
-        info_line.pack(fill="x", pady=(6, 8))
+            HoverButton(row, hover_bg=BTN_SEC_HOVER, text=" ✎ Edit ", font=FONT_SMALL, bg=BTN_SEC_BG, fg=BTN_SEC_FG, relief="flat", padx=8, pady=2, cursor="hand2", command=lambda: self._draw_legacy_routine_row(row, r, mode="edit")).pack(side="right", padx=(4, 0))
 
-        tk.Label(
-            info_line, text=f"🕒  {time_str}  |  📅  {days_str}",
-            font=FONT_BODY, fg=FG_MUTED, bg=BG_CARD,
-        ).pack(anchor="w")
+            def _tog(routine_id=rid):
+                self.planner.data_manager.toggle_routine_status(routine_id)
+                self._page_routines()
 
-        # Action Buttons
-        btn_frame = tk.Frame(row, bg=BG_CARD)
-        btn_frame.pack(anchor="e")
+            HoverButton(row, hover_bg=BTN_SEC_HOVER, text=" Toggle ", font=FONT_SMALL, bg=BTN_SEC_BG, fg=BTN_SEC_FG, relief="flat", padx=8, pady=2, cursor="hand2", command=_tog).pack(side="right")
 
-        HoverButton(
-            btn_frame, hover_bg="#bbf7d0" if active else "#fca5a5",
-            text=f" {'Disable' if active else 'Enable'} ",
-            font=FONT_SMALL, bg=status_bg, fg=status_fg,
-            relief="flat", padx=10, pady=4, cursor="hand2",
-            command=lambda: self._toggle_routine(rid),
-        ).pack(side="left", padx=4)
+        elif mode == "edit":
+            tk.Label(row, text="Name:", font=FONT_SMALL, fg=FG_MAIN, bg=BG_CARD).pack(side="left")
+            n_var = tk.StringVar(value=name)
+            tk.Entry(row, textvariable=n_var, font=FONT_SMALL, width=18).pack(side="left", padx=4)
 
-        HoverButton(
-            btn_frame, hover_bg=BTN_SEC_HOVER,
-            text=" Edit ",
-            font=FONT_SMALL, bg=BTN_SEC_BG, fg=BTN_SEC_FG,
-            relief="flat", padx=10, pady=4, cursor="hand2",
-            command=lambda: self._edit_routine_dialog(r),
-        ).pack(side="left", padx=4)
+            tk.Label(row, text="Start:", font=FONT_SMALL, fg=FG_MAIN, bg=BG_CARD).pack(side="left", padx=(6, 0))
+            s_var = tk.StringVar(value=start)
+            tk.Entry(row, textvariable=s_var, font=FONT_SMALL, width=8).pack(side="left", padx=4)
 
-        HoverButton(
-            btn_frame, hover_bg=BTN_DANGER_HOVER,
-            text=" Delete ",
-            font=FONT_SMALL, bg=BTN_DANGER_BG, fg=BTN_DANGER_FG,
-            relief="flat", padx=10, pady=4, cursor="hand2",
-            command=lambda: self._delete_routine_action(r),
-        ).pack(side="left", padx=4)
+            tk.Label(row, text="End:", font=FONT_SMALL, fg=FG_MAIN, bg=BG_CARD).pack(side="left", padx=(6, 0))
+            e_var = tk.StringVar(value=end)
+            tk.Entry(row, textvariable=e_var, font=FONT_SMALL, width=8).pack(side="left", padx=4)
 
-    def _add_routine_dialog(self):
-        self._routine_form_dialog(title="Add New Routine", routine=None)
+            def _save_changes():
+                new_n = n_var.get().strip()
+                new_s = s_var.get().strip()
+                new_e = e_var.get().strip()
+                if not new_n:
+                    messagebox.showwarning("Validation", "Name cannot be empty.", parent=self)
+                    return
+                updates = {
+                    "name": new_n,
+                    "title": new_n,
+                    "start_time": new_s,
+                    "start": new_s,
+                    "end_time": new_e,
+                    "end": new_e,
+                }
+                self.planner.data_manager.update_routine(rid, updates)
+                r.update(updates)
+                self._draw_legacy_routine_row(row, r, mode="normal")
 
-    def _edit_routine_dialog(self, routine):
-        self._routine_form_dialog(title="Edit Routine", routine=routine)
+            def _cancel():
+                self._draw_legacy_routine_row(row, r, mode="normal")
 
-    def _routine_form_dialog(self, title, routine=None):
+            HoverButton(row, hover_bg=PRIMARY_HOVER, text=" 💾 Save ", font=FONT_SMALL, bg=BTN_BG, fg=BTN_FG, relief="flat", padx=8, pady=2, cursor="hand2", command=_save_changes).pack(side="left", padx=6)
+            HoverButton(row, hover_bg=BTN_SEC_HOVER, text=" Cancel ", font=FONT_SMALL, bg=BTN_SEC_BG, fg=BTN_SEC_FG, relief="flat", padx=6, pady=2, cursor="hand2", command=_cancel).pack(side="left")
+
+    def _create_routine_period_wizard(self):
+        """Wizard to configure Routine Period with clean step layout and labeled inputs."""
         dlg = tk.Toplevel(self)
-        dlg.title(title)
+        dlg.title("Create Routine Period")
+        dlg.geometry("680x740")
         dlg.configure(bg=BG_MAIN)
-        dlg.geometry("440x460")
-        dlg.resizable(False, False)
 
-        tk.Label(
-            dlg, text=title, font=FONT_HEADING,
-            fg=FG_MAIN, bg=BG_MAIN,
-        ).pack(pady=(16, 12))
+        tk.Label(dlg, text="Routine Period Configuration Wizard", font=FONT_TITLE, fg=FG_MAIN, bg=BG_MAIN).pack(pady=12)
 
-        form = tk.Frame(dlg, bg=BG_MAIN, padx=24)
-        form.pack(fill="both", expand=True)
+        scroll = ScrollableFrame(dlg, bg=BG_MAIN)
+        scroll.pack(fill="both", expand=True, padx=20, pady=6)
+        f = scroll.inner
 
-        tk.Label(form, text="Routine Name:", font=FONT_BODY, fg=FG_MAIN, bg=BG_MAIN).pack(anchor="w", pady=(6, 2))
-        name_var = tk.StringVar(value=routine.get("name", "") if routine else "")
-        name_entry = tk.Entry(form, textvariable=name_var, font=FONT_BODY, bg=ENTRY_BG, fg=ENTRY_FG, highlightbackground=ENTRY_BORDER, highlightthickness=1, relief="flat")
-        name_entry.pack(fill="x", ipady=4)
-        name_entry.focus_set()
+        # Step 0: Period Info & Date Range
+        p_card = tk.Frame(f, bg=BG_CARD, padx=16, pady=14, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0)
+        p_card.pack(fill="x", pady=6)
 
-        time_row = tk.Frame(form, bg=BG_MAIN)
-        time_row.pack(fill="x", pady=(10, 2))
+        tk.Label(p_card, text="Step 0: Period Details & Date Range", font=FONT_HEADING, fg=PRIMARY_BLUE, bg=BG_CARD).pack(anchor="w", pady=(0, 6))
 
-        tk.Label(time_row, text="Start Time (HH:MM):", font=FONT_BODY, fg=FG_MAIN, bg=BG_MAIN).grid(row=0, column=0, sticky="w")
-        tk.Label(time_row, text="End Time (HH:MM):", font=FONT_BODY, fg=FG_MAIN, bg=BG_MAIN).grid(row=0, column=1, sticky="w", padx=(20, 0))
+        tk.Label(p_card, text="Period Name:", font=FONT_SMALL, fg=FG_MAIN, bg=BG_CARD).pack(anchor="w")
+        name_var = tk.StringVar(value="Fall Semester 2026")
+        tk.Entry(p_card, textvariable=name_var, font=FONT_BODY, width=36).pack(fill="x", pady=2)
 
-        start_var = tk.StringVar(value=routine.get("start_time", routine.get("start", "06:00")) if routine else "06:00")
-        start_entry = tk.Entry(time_row, textvariable=start_var, font=FONT_BODY, bg=ENTRY_BG, fg=ENTRY_FG, highlightbackground=ENTRY_BORDER, highlightthickness=1, relief="flat", width=12)
-        start_entry.grid(row=1, column=0, sticky="w", ipady=4, pady=(2, 0))
+        d_row = tk.Frame(p_card, bg=BG_CARD)
+        d_row.pack(fill="x", pady=6)
+        tk.Label(d_row, text="From Date (YYYY-MM-DD):", font=FONT_SMALL, fg=FG_MAIN, bg=BG_CARD).grid(row=0, column=0, sticky="w")
+        tk.Label(d_row, text="To Date (YYYY-MM-DD):", font=FONT_SMALL, fg=FG_MAIN, bg=BG_CARD).grid(row=0, column=1, sticky="w", padx=12)
 
-        end_var = tk.StringVar(value=routine.get("end_time", routine.get("end", "07:00")) if routine else "07:00")
-        end_entry = tk.Entry(time_row, textvariable=end_var, font=FONT_BODY, bg=ENTRY_BG, fg=ENTRY_FG, highlightbackground=ENTRY_BORDER, highlightthickness=1, relief="flat", width=12)
-        end_entry.grid(row=1, column=1, sticky="w", padx=(20, 0), ipady=4, pady=(2, 0))
+        s_date_var = tk.StringVar(value=today_str())
+        e_date_var = tk.StringVar(value=(date.today() + timedelta(days=30)).isoformat())
+        tk.Entry(d_row, textvariable=s_date_var, font=FONT_BODY, width=16).grid(row=1, column=0, sticky="w", pady=2)
+        tk.Entry(d_row, textvariable=e_date_var, font=FONT_BODY, width=16).grid(row=1, column=1, sticky="w", padx=12, pady=2)
 
-        tk.Label(form, text="Recurrence Days:", font=FONT_BODY, fg=FG_MAIN, bg=BG_MAIN).pack(anchor="w", pady=(12, 4))
-        days_frame = tk.Frame(form, bg=BG_MAIN)
-        days_frame.pack(fill="x", pady=2)
+        # Step 1: Common Routine Tasks Library (POLISHED LABELED INPUTS)
+        lib_card = tk.Frame(f, bg=BG_CARD, padx=16, pady=14, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0)
+        lib_card.pack(fill="x", pady=6)
 
-        day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        day_vars = {}
-        existing_days = routine.get("days", day_names) if routine else day_names
+        tk.Label(lib_card, text="Step 1: Common Routine Tasks Library", font=FONT_HEADING, fg=PRIMARY_BLUE, bg=BG_CARD).pack(anchor="w", pady=(0, 4))
+        tk.Label(lib_card, text="Define common reusable tasks that can be assigned across weekdays.", font=FONT_SMALL, fg=FG_MUTED, bg=BG_CARD).pack(anchor="w", pady=(0, 8))
 
-        for d in day_names:
-            var = tk.BooleanVar(value=(d in existing_days))
-            day_vars[d] = var
-            cb = tk.Checkbutton(
-                days_frame, text=d[:3], variable=var,
-                font=FONT_SMALL, fg=FG_MAIN, bg=BG_MAIN,
-                activebackground=BG_MAIN, selectcolor=PRIMARY_LIGHT
-            )
-            cb.pack(side="left", padx=1)
+        common_tasks = [
+            {"name": "Exercise", "default_time": "06:00", "duration": 60, "category": "Health"},
+            {"name": "Breakfast", "default_time": "07:30", "duration": 30, "category": "Meal"},
+            {"name": "College", "default_time": "09:00", "duration": 240, "category": "Education"},
+            {"name": "Lunch", "default_time": "13:00", "duration": 60, "category": "Meal"},
+            {"name": "Study", "default_time": "20:00", "duration": 120, "category": "Education"},
+        ]
 
-        def _save():
+        tasks_list_frame = tk.Frame(lib_card, bg=BG_CARD)
+        tasks_list_frame.pack(fill="x", pady=4)
+
+        def _refresh_lib_tasks():
+            for w in tasks_list_frame.winfo_children():
+                w.destroy()
+            for idx, ct in enumerate(common_tasks):
+                row = tk.Frame(tasks_list_frame, bg=PRIMARY_LIGHT, padx=8, pady=4, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0)
+                row.pack(fill="x", pady=2)
+                tk.Label(row, text=f"• {ct['name']} @ {ct['default_time']} ({ct['duration']} min)", font=FONT_SUBHEAD, fg=FG_MAIN, bg=PRIMARY_LIGHT).pack(side="left")
+                def _del_ct(i=idx):
+                    common_tasks.pop(i)
+                    _refresh_lib_tasks()
+                    _refresh_days_config()
+                HoverButton(row, hover_bg="#fecaca", text="✕", font=FONT_SMALL, bg=BTN_DANGER_BG, fg=BTN_DANGER_FG, relief="flat", padx=6, pady=1, cursor="hand2", command=_del_ct).pack(side="right")
+
+        _refresh_lib_tasks()
+
+        # Add new common task with explicit form layout
+        add_form = tk.Frame(lib_card, bg=BG_CARD)
+        add_form.pack(fill="x", pady=(8, 4))
+
+        tk.Label(add_form, text="Task Name:", font=FONT_SMALL, fg=FG_MAIN, bg=BG_CARD).grid(row=0, column=0, sticky="w")
+        tk.Label(add_form, text="Start Time (HH:MM):", font=FONT_SMALL, fg=FG_MAIN, bg=BG_CARD).grid(row=0, column=1, sticky="w", padx=8)
+        tk.Label(add_form, text="Duration (min):", font=FONT_SMALL, fg=FG_MAIN, bg=BG_CARD).grid(row=0, column=2, sticky="w", padx=8)
+
+        ct_n_var = tk.StringVar()
+        ct_t_var = tk.StringVar(value="08:00")
+        ct_d_var = tk.StringVar(value="60")
+
+        tk.Entry(add_form, textvariable=ct_n_var, font=FONT_BODY, width=20).grid(row=1, column=0, sticky="w", pady=2)
+        tk.Entry(add_form, textvariable=ct_t_var, font=FONT_BODY, width=12).grid(row=1, column=1, sticky="w", padx=8, pady=2)
+        tk.Entry(add_form, textvariable=ct_d_var, font=FONT_BODY, width=10).grid(row=1, column=2, sticky="w", padx=8, pady=2)
+
+        def _add_ct():
+            n = ct_n_var.get().strip()
+            if not n:
+                return
+            common_tasks.append({
+                "name": n,
+                "default_time": ct_t_var.get().strip() or "08:00",
+                "duration": int(ct_d_var.get().strip() or "60"),
+                "category": "General",
+            })
+            ct_n_var.set("")
+            _refresh_lib_tasks()
+            _refresh_days_config()
+
+        HoverButton(add_form, hover_bg=PRIMARY_HOVER, text=" + Add to Library ", font=FONT_SMALL, bg=BTN_BG, fg=BTN_FG, relief="flat", padx=10, pady=3, cursor="hand2", command=_add_ct).grid(row=1, column=3, sticky="w", padx=8, pady=2)
+
+        # Step 2: Monday–Sunday Day-by-Day Configuration
+        days_card = tk.Frame(f, bg=BG_CARD, padx=16, pady=14, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0)
+        days_card.pack(fill="x", pady=6)
+
+        tk.Label(days_card, text="Step 2: Monday – Sunday Configurations", font=FONT_HEADING, fg=PRIMARY_BLUE, bg=BG_CARD).pack(anchor="w", pady=(0, 4))
+        tk.Label(days_card, text="Configure each day. Modifying a time on Monday overrides Monday without altering other days.", font=FONT_SMALL, fg=FG_MUTED, bg=BG_CARD).pack(anchor="w", pady=(0, 8))
+
+        days_data = {
+            day: [dict(ct) for ct in common_tasks]
+            for day in DAYS_OF_WEEK
+        }
+
+        day_notebook = ttk.Notebook(days_card)
+        day_notebook.pack(fill="both", expand=True, pady=4)
+
+        day_frames = {}
+        for day in DAYS_OF_WEEK:
+            df = tk.Frame(day_notebook, bg=BG_MAIN, padx=10, pady=8)
+            day_notebook.add(df, text=f" {day[:3]} ")
+            day_frames[day] = df
+
+        def _refresh_days_config():
+            for day, df in day_frames.items():
+                for w in df.winfo_children():
+                    w.destroy()
+
+                tk.Label(df, text=f"{day} Routines", font=FONT_SUBHEAD, fg=PRIMARY_BLUE, bg=BG_MAIN).pack(anchor="w", pady=(0, 4))
+
+                items = days_data.get(day, [])
+                for idx, item in enumerate(items):
+                    row = tk.Frame(df, bg=BG_CARD, padx=8, pady=4, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0)
+                    row.pack(fill="x", pady=2)
+
+                    en_var = tk.BooleanVar(value=item.get("enabled", True))
+                    def _toggle_en(i=idx, v=en_var, d=day):
+                        days_data[d][i]["enabled"] = v.get()
+                    tk.Checkbutton(row, text=item.get("name"), variable=en_var, font=FONT_SUBHEAD, bg=BG_CARD, command=_toggle_en).pack(side="left")
+
+                    tk.Label(row, text="Time:", font=FONT_SMALL, fg=FG_MUTED, bg=BG_CARD).pack(side="left", padx=(10, 2))
+                    t_var = tk.StringVar(value=item.get("default_time") or item.get("time", "08:00"))
+                    def _update_t(i=idx, v=t_var, d=day):
+                        days_data[d][i]["time"] = v.get()
+                        days_data[d][i]["is_override"] = True
+                    t_ent = tk.Entry(row, textvariable=t_var, font=FONT_SMALL, width=8)
+                    t_ent.pack(side="left", padx=2)
+                    t_ent.bind("<FocusOut>", lambda e, i=idx, v=t_var, d=day: _update_t(i, v, d))
+
+                    tk.Label(row, text="Dur:", font=FONT_SMALL, fg=FG_MUTED, bg=BG_CARD).pack(side="left", padx=(6, 2))
+                    dur_var = tk.StringVar(value=str(item.get("duration", 60)))
+                    def _update_dur(i=idx, v=dur_var, d=day):
+                        try:
+                            days_data[d][i]["duration"] = int(v.get())
+                        except ValueError:
+                            pass
+                    d_ent = tk.Entry(row, textvariable=dur_var, font=FONT_SMALL, width=5)
+                    d_ent.pack(side="left", padx=2)
+                    d_ent.bind("<FocusOut>", lambda e, i=idx, v=dur_var, d=day: _update_dur(i, v, d))
+
+                    def _remove_from_day(i=idx, d=day):
+                        days_data[d].pop(i)
+                        _refresh_days_config()
+                    HoverButton(row, hover_bg="#fecaca", text="✕", font=FONT_SMALL, bg=BTN_DANGER_BG, fg=BTN_DANGER_FG, relief="flat", padx=4, pady=1, cursor="hand2", command=_remove_from_day).pack(side="right")
+
+                # Add new day-specific routine
+                add_day_row = tk.Frame(df, bg=BG_MAIN)
+                add_day_row.pack(fill="x", pady=6)
+                new_n_var = tk.StringVar()
+                new_t_var = tk.StringVar(value="08:00")
+                tk.Entry(add_day_row, textvariable=new_n_var, font=FONT_SMALL, width=14).pack(side="left", padx=2)
+                tk.Entry(add_day_row, textvariable=new_t_var, font=FONT_SMALL, width=8).pack(side="left", padx=2)
+                def _add_to_day(d=day, nv=new_n_var, tv=new_t_var):
+                    name_str = nv.get().strip()
+                    if name_str:
+                        days_data[d].append({
+                            "name": name_str,
+                            "time": tv.get().strip() or "08:00",
+                            "duration": 60,
+                            "is_override": True,
+                            "enabled": True,
+                        })
+                        nv.set("")
+                        _refresh_days_config()
+                HoverButton(add_day_row, hover_bg=PRIMARY_HOVER, text="+ Add to this day", font=FONT_SMALL, bg=BTN_BG, fg=BTN_FG, relief="flat", padx=6, pady=2, cursor="hand2", command=_add_to_day).pack(side="left", padx=4)
+
+        _refresh_days_config()
+
+        # Step 3: Save Routine Period
+        def _save_period():
             name = name_var.get().strip()
-            start = start_var.get().strip()
-            end = end_var.get().strip()
+            s_date = s_date_var.get().strip()
+            e_date = e_date_var.get().strip()
 
+            valid, err = validate_date_range(s_date, e_date)
+            if not valid:
+                messagebox.showerror("Date Validation Error", err, parent=dlg)
+                return
+
+            formatted_days_config = {}
+            for day in DAYS_OF_WEEK:
+                formatted_days_config[day] = [
+                    {
+                        "name": it.get("name"),
+                        "time": it.get("time") or it.get("default_time", "08:00"),
+                        "duration": it.get("duration", 60),
+                        "category": it.get("category", "General"),
+                        "is_override": it.get("is_override", False),
+                        "enabled": it.get("enabled", True),
+                    }
+                    for it in days_data.get(day, [])
+                ]
+
+            period_data = {
+                "name": name,
+                "start_date": s_date,
+                "end_date": e_date,
+                "common_tasks": common_tasks,
+                "days_config": formatted_days_config,
+                "enabled": True,
+            }
+
+            try:
+                self.planner.save_routine_period(period_data)
+                messagebox.showinfo("Success", f"Routine Period '{name}' saved successfully!", parent=dlg)
+                dlg.destroy()
+                self._page_routines()
+            except Exception as e:
+                messagebox.showerror("Error Saving Period", str(e), parent=dlg)
+
+        HoverButton(
+            dlg, hover_bg=BTN_SUCCESS_HOVER,
+            text="  💾  Save Routine Period  ",
+            font=FONT_HEADING, bg=BTN_SUCCESS_BG, fg="#ffffff",
+            relief="flat", padx=20, pady=10, cursor="hand2",
+            command=_save_period,
+        ).pack(pady=12)
+
+    def _add_legacy_routine_dialog(self):
+        dlg = tk.Toplevel(self)
+        dlg.title("Add Global Recurring Routine")
+        dlg.geometry("400x320")
+        dlg.configure(bg=BG_MAIN)
+
+        tk.Label(dlg, text="Add Global Recurring Routine", font=FONT_HEADING, fg=FG_MAIN, bg=BG_MAIN).pack(pady=10)
+        f = tk.Frame(dlg, bg=BG_MAIN, padx=20)
+        f.pack(fill="both")
+
+        tk.Label(f, text="Name:", font=FONT_SMALL, fg=FG_MAIN, bg=BG_MAIN).grid(row=0, column=0, sticky="w")
+        n_var = tk.StringVar()
+        tk.Entry(f, textvariable=n_var, font=FONT_BODY, width=22).grid(row=0, column=1, pady=4)
+
+        tk.Label(f, text="Start (HH:MM):", font=FONT_SMALL, fg=FG_MAIN, bg=BG_MAIN).grid(row=1, column=0, sticky="w")
+        st_var = tk.StringVar(value="08:00")
+        tk.Entry(f, textvariable=st_var, font=FONT_BODY, width=22).grid(row=1, column=1, pady=4)
+
+        tk.Label(f, text="End (HH:MM):", font=FONT_SMALL, fg=FG_MAIN, bg=BG_MAIN).grid(row=2, column=0, sticky="w")
+        et_var = tk.StringVar(value="09:00")
+        tk.Entry(f, textvariable=et_var, font=FONT_BODY, width=22).grid(row=2, column=1, pady=4)
+
+        def _save_leg():
+            name = n_var.get().strip()
             if not name:
-                messagebox.showerror("Validation Error", "Routine Name cannot be empty.", parent=dlg)
                 return
-
-            time_regex = r"^([01]?\d|2[0-3]):[0-5]\d$"
-            if not re.match(time_regex, start):
-                messagebox.showerror("Validation Error", "Start Time must be valid HH:MM format (e.g. 06:30).", parent=dlg)
-                return
-            if not re.match(time_regex, end):
-                messagebox.showerror("Validation Error", "End Time must be valid HH:MM format (e.g. 07:30).", parent=dlg)
-                return
-
-            s_min = time_to_minutes(start)
-            e_min = time_to_minutes(end)
-            if e_min <= s_min:
-                messagebox.showerror("Validation Error", "End Time must be after Start Time.", parent=dlg)
-                return
-
-            selected_days = [d for d, v in day_vars.items() if v.get()]
-            if not selected_days:
-                selected_days = day_names
-
-            rec = {
-                "routine_id": routine.get("routine_id") if routine else None,
+            self.planner.data_manager.add_routine({
                 "name": name,
                 "title": name,
-                "start_time": start,
-                "start": start,
-                "end_time": end,
-                "end": end,
-                "days": selected_days,
-                "enabled": routine.get("enabled", True) if routine else True,
-                "active": routine.get("active", True) if routine else True,
-            }
-            self.planner.data_manager.add_routine(rec)
+                "start_time": st_var.get().strip(),
+                "start": st_var.get().strip(),
+                "end_time": et_var.get().strip(),
+                "end": et_var.get().strip(),
+                "days": DAYS_OF_WEEK,
+                "enabled": True,
+            })
             dlg.destroy()
-            self._show_page("routines")
+            self._page_routines()
 
-        btn_box = tk.Frame(dlg, bg=BG_MAIN)
-        btn_box.pack(pady=16)
-
-        HoverButton(
-            btn_box, hover_bg=PRIMARY_HOVER,
-            text="  Save Routine  ", font=FONT_SUBHEAD,
-            bg=BTN_BG, fg=BTN_FG, relief="flat", padx=14, pady=6, cursor="hand2",
-            command=_save,
-        ).pack(side="left", padx=6)
-
-        HoverButton(
-            btn_box, hover_bg=BTN_SEC_HOVER,
-            text=" Cancel ", font=FONT_BODY,
-            bg=BTN_SEC_BG, fg=BTN_SEC_FG, relief="flat", padx=10, pady=6, cursor="hand2",
-            command=dlg.destroy,
-        ).pack(side="left", padx=6)
-
-    def _delete_routine_action(self, r):
-        name = r.get("name") or r.get("title", "Routine")
-        rid = r.get("routine_id") or name
-        if messagebox.askyesno("Confirm Delete", f"Delete routine '{name}'?\nThis will remove it from future plans."):
-            self.planner.data_manager.delete_routine(rid)
-            self._show_page("routines")
-
-    def _toggle_routine(self, rid):
-        self.planner.data_manager.toggle_routine_status(rid)
-        self._show_page("routines")
+        HoverButton(dlg, hover_bg=PRIMARY_HOVER, text="Save Routine", font=FONT_SUBHEAD, bg=BTN_BG, fg=BTN_FG, relief="flat", padx=12, pady=6, cursor="hand2", command=_save_leg).pack(pady=16)
 
     # ========================================================
-    # PAGE: MEMORY
+    # PAGE: MEMORY (LEARNED PREFERENCES + FUTURE CONFIRMED PLANS)
     # ========================================================
 
     def _page_memory(self):
+        self._clear_content_frame()
+        self.planner.check_date_rollover()
+
         frame = tk.Frame(self.content, bg=BG_MAIN)
         frame.pack(fill="both", expand=True, padx=36, pady=28)
 
-        tk.Label(
-            frame, text="Long-term Memory",
-            font=FONT_TITLE, fg=FG_MAIN, bg=BG_MAIN,
-        ).pack(anchor="w")
-
-        tk.Label(
-            frame,
-            text="DayWise remembers useful information to improve future planning.",
-            font=FONT_BODY, fg=FG_MUTED, bg=BG_MAIN,
-        ).pack(anchor="w", pady=(2, 16))
-
-        memory = self.planner.load_memory()
+        tk.Label(frame, text="Memory & Future Plans 🧠", font=FONT_TITLE, fg=FG_MAIN, bg=BG_MAIN).pack(anchor="w")
+        tk.Label(frame, text="DayWise clearly distinguishes long-term user memory/preferences from future confirmed plans.", font=FONT_SMALL, fg=FG_MUTED, bg=BG_MAIN).pack(anchor="w", pady=(2, 12))
 
         scroll = ScrollableFrame(frame, bg=BG_MAIN)
         scroll.pack(fill="both", expand=True)
+        body = scroll.inner
 
-        category_labels = {
-            "preferences":   ("⚙  Preferences",          PRIMARY_BLUE),
-            "routines":      ("🔄  Recurring Activities", "#0369a1"),
-            "future_events": ("📅  Future Events",        "#9a3412"),
-            "constraints":   ("🚫  Schedule Constraints", "#991b1b"),
-            "sleep_schedule":("😴  Sleep Schedule",       FG_MUTED),
-        }
+        # --- Section 1: Future Confirmed Plans ---
+        tk.Label(body, text="📅 Future Confirmed Plans", font=FONT_HEADING, fg=PRIMARY_BLUE, bg=BG_MAIN).pack(anchor="w", pady=(0, 8))
 
-        has_any = False
+        future_plans = self.planner.get_all_future_plans()
+        if not future_plans:
+            c = tk.Frame(body, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0, padx=16, pady=16)
+            c.pack(fill="x", pady=(0, 14))
+            tk.Label(c, text="No future confirmed plans pending. When you plan a future date in 'Plan My Day' and click Confirm, it will appear here.", font=FONT_BODY, fg=FG_MUTED, bg=BG_CARD).pack()
+        else:
+            for f_date, f_plan in sorted(future_plans.items()):
+                self._render_future_plan_card(body, f_date, f_plan)
 
-        for cat, (label, colour) in category_labels.items():
-            entries = memory.get(cat, [])
-            if not entries:
-                continue
-            has_any = True
+        ttk.Separator(body, orient="horizontal").pack(fill="x", pady=16)
 
-            tk.Label(
-                scroll.inner, text=label,
-                font=FONT_SUBHEAD, fg=colour, bg=BG_MAIN,
-            ).pack(anchor="w", padx=4, pady=(12, 4))
+        # --- Section 2: Learned User Memory & Preferences ---
+        tk.Label(body, text="💡 Learned Facts, Preferences & Sleep Schedule", font=FONT_HEADING, fg=FG_MAIN, bg=BG_MAIN).pack(anchor="w", pady=(0, 8))
 
-            for entry in entries:
-                card = tk.Frame(
-                    scroll.inner, bg=BG_CARD,
-                    highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0,
-                    padx=14, pady=8,
-                )
-                card.pack(fill="x", expand=True, padx=4, pady=3)
+        mem_data = self.planner.load_memory()
+        for cat in ["preferences", "routines", "constraints", "sleep_schedule", "future_events"]:
+            entries = mem_data.get(cat, [])
+            if entries:
+                cat_card = tk.Frame(body, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0, padx=14, pady=10)
+                cat_card.pack(fill="x", pady=4)
+                tk.Label(cat_card, text=f"Category: {cat.replace('_', ' ').capitalize()}", font=FONT_SUBHEAD, fg=PRIMARY_BLUE, bg=BG_CARD).pack(anchor="w", pady=(0, 4))
+                for ent in entries:
+                    tk.Label(cat_card, text=f"• {ent.get('text')}", font=FONT_BODY, fg=FG_MAIN, bg=BG_CARD).pack(anchor="w")
 
-                tk.Label(
-                    card,
-                    text=entry.get("text", str(entry)),
-                    font=FONT_BODY, fg=FG_MAIN, bg=BG_CARD,
-                    wraplength=650, justify="left",
-                ).pack(anchor="w")
+    def _render_future_plan_card(self, parent, plan_date, plan_dict):
+        card = tk.Frame(parent, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0, padx=16, pady=14)
+        card.pack(fill="x", pady=6)
 
-                added = entry.get("added_at", "")
-                if added:
-                    tk.Label(
-                        card, text=f"Stored: {added}",
-                        font=FONT_SMALL, fg=FG_MUTED, bg=BG_CARD,
-                    ).pack(anchor="w")
+        hdr = tk.Frame(card, bg=BG_CARD)
+        hdr.pack(fill="x")
 
-        if not has_any:
-            empty_card = tk.Frame(
-                scroll.inner, bg=BG_CARD,
-                highlightbackground=BORDER_COLOR, highlightthickness=1,
-                bd=0, pady=40, padx=20,
-            )
-            empty_card.pack(fill="x", pady=20)
-            tk.Label(
-                empty_card,
-                text=(
-                    "No memory entries yet.\n\n"
-                    "DayWise will remember useful facts as you interact with it.\n\n"
-                    'Try: "I prefer studying at night" or\n'
-                    '"I have college from 9 AM to 4 PM"'
-                ),
-                font=FONT_BODY, fg=FG_MUTED, bg=BG_CARD,
-                justify="center",
-            ).pack()
+        tk.Label(hdr, text=f"📅 Confirmed for: {format_date_display(plan_date)}", font=FONT_HEADING, fg="#0369a1", bg=BG_CARD).pack(side="left")
+        tk.Label(hdr, text=" FUTURE CONFIRMED ", font=("Segoe UI", 8, "bold"), fg="#0369a1", bg="#e0f2fe", padx=6, pady=2).pack(side="left", padx=8)
+
+        def _cancel_fut(pd=plan_date):
+            if messagebox.askyesno("Cancel Future Plan", f"Are you sure you want to cancel the confirmed plan for {pd}?", parent=self):
+                self.planner.delete_future_plan(pd)
+                self._page_memory()
+
+        HoverButton(hdr, hover_bg="#fecaca", text=" Cancel Plan ", font=FONT_SMALL, bg=BTN_DANGER_BG, fg=BTN_DANGER_FG, relief="flat", padx=8, pady=2, cursor="hand2", command=_cancel_fut).pack(side="right")
+
+        sched = plan_dict.get("schedule", [])
+        tasks_str = ", ".join([e.get("title", "") for e in sched[:6]])
+        if len(sched) > 6:
+            tasks_str += f" (+{len(sched)-6} more)"
+
+        tk.Label(card, text=f"Scheduled Tasks ({len(sched)}): {tasks_str}", font=FONT_BODY, fg=FG_MUTED, bg=BG_CARD).pack(anchor="w", pady=(6, 0))
 
     # ========================================================
     # PAGE: SEARCH
     # ========================================================
 
     def _page_search(self):
+        self._clear_content_frame()
         frame = tk.Frame(self.content, bg=BG_MAIN)
         frame.pack(fill="both", expand=True, padx=36, pady=28)
 
-        tk.Label(
-            frame, text="Search",
-            font=FONT_TITLE, fg=FG_MAIN, bg=BG_MAIN,
-        ).pack(anchor="w")
+        tk.Label(frame, text="Global Search 🔍", font=FONT_TITLE, fg=FG_MAIN, bg=BG_MAIN).pack(anchor="w")
+        tk.Label(frame, text="Search across tasks, routines, future plans, active plans, and history records.", font=FONT_SMALL, fg=FG_MUTED, bg=BG_MAIN).pack(anchor="w", pady=(2, 12))
 
-        # Exact required label: "🔍 Search past plans"
-        tk.Label(
-            frame, text="🔍 Search past plans",
-            font=FONT_HEADING, fg=FG_MAIN, bg=BG_MAIN,
-        ).pack(anchor="w", pady=(8, 4))
-
-        tk.Label(
-            frame,
-            text="Search by date (YYYY-MM-DD), task title, or keyword.",
-            font=FONT_SMALL, fg=FG_MUTED, bg=BG_MAIN,
-        ).pack(anchor="w", pady=(0, 10))
-
-        search_card = tk.Frame(
-            frame, bg=BG_CARD,
-            highlightbackground=BORDER_COLOR, highlightthickness=1,
-            bd=0, padx=14, pady=10,
-        )
+        search_card = tk.Frame(frame, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0, padx=14, pady=10)
         search_card.pack(fill="x", pady=(0, 14))
 
-        self._search_var = tk.StringVar()
-        search_entry = tk.Entry(
-            search_card,
-            textvariable=self._search_var,
-            font=FONT_BODY, bg=ENTRY_BG, fg=ENTRY_FG,
-            highlightbackground=ENTRY_BORDER, highlightthickness=1,
-            relief="flat", width=42,
-        )
-        search_entry.pack(side="left", padx=(0, 10), ipady=4)
-        search_entry.focus_set()
-        search_entry.bind("<Return>", lambda e: self._do_search())
+        self._global_search_var = tk.StringVar()
+        s_ent = tk.Entry(search_card, textvariable=self._global_search_var, font=FONT_BODY, bg=ENTRY_BG, fg=ENTRY_FG, highlightbackground=ENTRY_BORDER, highlightthickness=1, relief="flat", width=34)
+        s_ent.pack(side="left", padx=(0, 8), ipady=4)
+        s_ent.bind("<Return>", lambda e: self._perform_global_search())
 
-        HoverButton(
-            search_card, hover_bg=PRIMARY_HOVER,
-            text="  🔍  Search  ",
-            font=FONT_SUBHEAD, bg=BTN_BG, fg=BTN_FG,
-            relief="flat", padx=12, pady=6, cursor="hand2",
-            command=self._do_search,
-        ).pack(side="left")
+        HoverButton(search_card, hover_bg=PRIMARY_HOVER, text="Search Everything", font=FONT_BODY, bg=BTN_BG, fg=BTN_FG, relief="flat", padx=14, pady=4, cursor="hand2", command=self._perform_global_search).pack(side="left")
 
-        self._search_result_label = tk.Label(
-            frame, text="", font=FONT_BODY,
-            fg=FG_MUTED, bg=BG_MAIN,
-        )
-        self._search_result_label.pack(anchor="w", pady=(0, 8))
+        self._search_results_container = ScrollableFrame(frame, bg=BG_MAIN)
+        self._search_results_container.pack(fill="both", expand=True)
 
-        scroll = ScrollableFrame(frame, bg=BG_MAIN)
-        scroll.pack(fill="both", expand=True)
-        self._search_results_frame = scroll.inner
-
-    def _do_search(self):
-        query = self._search_var.get().strip()
-        if not query:
-            self._search_result_label.config(
-                text="Enter a search term above.", fg=FG_MUTED
-            )
-            return
-
-        results = self.planner.search_history(query)
-        self._search_result_label.config(
-            text=f"{len(results)} result(s) found for '{query}'",
-            fg="#166534" if results else "#9a3412",
-        )
-
-        for w in self._search_results_frame.winfo_children():
+    def _perform_global_search(self):
+        query = self._global_search_var.get().strip().lower()
+        parent = self._search_results_container.inner
+        for w in parent.winfo_children():
             w.destroy()
 
-        if not results:
-            empty_card = tk.Frame(
-                self._search_results_frame, bg=BG_CARD,
-                highlightbackground=BORDER_COLOR, highlightthickness=1,
-                bd=0, pady=30, padx=20,
-            )
-            empty_card.pack(fill="x", pady=10)
-            tk.Label(
-                empty_card,
-                text="No plans found matching your search.",
-                font=FONT_BODY, fg=FG_MUTED, bg=BG_CARD,
-            ).pack()
+        if not query:
             return
 
-        for record in results:
-            date_label = format_date_display(
-                record.get("date", "")
-            )
-            created = record.get("created_at", "")[:16]
-            header = tk.Frame(
-                self._search_results_frame,
-                bg=PRIMARY_LIGHT, pady=6, padx=12,
-                highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0
-            )
-            header.pack(fill="x", expand=True, pady=(10, 0))
+        hist_results = self.planner.search_history(query)
+        fut_plans = self.planner.get_all_future_plans()
+        routines = self.planner.load_routines()
+        tasks = self.planner.load_tasks()
 
-            tk.Label(
-                header,
-                text=f"📅  {date_label}  |  Created: {created}",
-                font=FONT_SUBHEAD, fg=PRIMARY_BLUE, bg=PRIMARY_LIGHT,
-            ).pack(anchor="w")
+        found_any = False
 
-            render_schedule(
-                self._search_results_frame,
-                record.get("schedule", []),
-                bg=BG_MAIN,
-            )
+        if hist_results:
+            found_any = True
+            tk.Label(parent, text=f"📜 Historical Records ({len(hist_results)})", font=FONT_HEADING, fg=PRIMARY_BLUE, bg=BG_MAIN).pack(anchor="w", pady=(6, 4))
+            for h in hist_results:
+                c = tk.Frame(parent, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0, padx=12, pady=8)
+                c.pack(fill="x", pady=2)
+                tk.Label(c, text=f"📅 {h.get('date')}", font=FONT_SUBHEAD, fg=FG_MAIN, bg=BG_CARD).pack(side="left")
+                tk.Label(c, text=f" – {len(h.get('schedule', []))} items", font=FONT_SMALL, fg=FG_MUTED, bg=BG_CARD).pack(side="left")
+
+        matching_fut = {d: p for d, p in fut_plans.items() if query in d.lower() or any(query in e.get("title", "").lower() for e in p.get("schedule", []))}
+        if matching_fut:
+            found_any = True
+            tk.Label(parent, text=f"📅 Future Confirmed Plans ({len(matching_fut)})", font=FONT_HEADING, fg="#0369a1", bg=BG_MAIN).pack(anchor="w", pady=(10, 4))
+            for d, p in matching_fut.items():
+                c = tk.Frame(parent, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0, padx=12, pady=8)
+                c.pack(fill="x", pady=2)
+                tk.Label(c, text=f"Future: {d}", font=FONT_SUBHEAD, fg="#0369a1", bg=BG_CARD).pack(side="left")
+
+        matching_routines = [r for r in routines if query in (r.get("name") or r.get("title", "")).lower()]
+        if matching_routines:
+            found_any = True
+            tk.Label(parent, text=f"🔄 Routines ({len(matching_routines)})", font=FONT_HEADING, fg=FG_MAIN, bg=BG_MAIN).pack(anchor="w", pady=(10, 4))
+            for r in matching_routines:
+                c = tk.Frame(parent, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0, padx=12, pady=8)
+                c.pack(fill="x", pady=2)
+                tk.Label(c, text=f"Routine: {r.get('name')}", font=FONT_SUBHEAD, fg=FG_MAIN, bg=BG_CARD).pack(side="left")
+
+        if not found_any:
+            c = tk.Frame(parent, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0, padx=20, pady=20)
+            c.pack(fill="x", pady=10)
+            tk.Label(c, text=f"No results found matching '{query}'.", font=FONT_BODY, fg=FG_MUTED, bg=BG_CARD).pack()
 
 
 # ============================================================

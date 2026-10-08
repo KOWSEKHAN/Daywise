@@ -427,6 +427,7 @@ class Planner:
                 "field":      clarification["field"],
                 "task_title": clarification["task_title"],
                 "pending_tasks":   parsed_tasks,
+                "tasks":           parsed_tasks,
                 "original_input":  user_input,
                 "plan_date":       plan_date,
                 "memory_stored":   memory_stored,
@@ -519,6 +520,10 @@ class Planner:
 
     def get_today_plan(self):
         """Returns the most-recent schedule for today."""
+        self.check_date_rollover()
+        active = self.data_manager.load_active_plan()
+        if active and active.get("date") == date.today().isoformat():
+            return active.get("schedule", [])
         records = self.data_manager.get_plan_for_today()
         if records:
             return records[-1].get("schedule", [])
@@ -551,3 +556,247 @@ class Planner:
     def update_task_status(self, task_id, new_status):
         """Delegates status update to data manager."""
         return self.data_manager.update_task_status(task_id, new_status)
+
+    # --------------------------------------------------------
+    # LIFECYCLE EXTENSIONS
+    # --------------------------------------------------------
+
+    def check_date_rollover(self, current_date=None):
+        """
+        Processes midnight / date changes: finalizes past active plans into history,
+        and promotes any future plan for today into the active execution plan.
+        """
+        return self.data_manager.check_and_process_rollover(current_date=current_date)
+
+    def get_routines_for_date(self, plan_date):
+        """
+        Loads applicable routines for plan_date (respecting routine periods and day overrides).
+        """
+        return self.data_manager.get_routines_for_date(plan_date)
+
+    def load_routine_periods(self):
+        """Loads all routine periods."""
+        return self.data_manager.load_routine_periods()
+
+    def save_routine_period(self, period_data):
+        """Saves or updates a routine period."""
+        return self.data_manager.save_routine_period(period_data)
+
+    def delete_routine_period(self, period_id):
+        """Deletes a routine period."""
+        return self.data_manager.delete_routine_period(period_id)
+
+    def generate_date_plan(self, plan_date, one_time_tasks=None, routine_overrides=None, raw_input=None):
+        """
+        Generates a date-specific daily plan from routines, one-time tasks, and optional NLP input.
+        Does NOT automatically confirm the plan.
+        Returns a plan dictionary in 'generated' state, or clarification dict if needed.
+        """
+        import uuid
+        from core.scheduler import schedule_tasks
+
+        # If natural language input was provided, check if it requires clarification
+        if raw_input and raw_input.strip():
+            nlp_result = self.plan(raw_input.strip(), plan_date=plan_date)
+            if nlp_result.get("needs_clarification"):
+                return nlp_result
+
+        # Load applicable routines for this date
+        applicable_routines = self.data_manager.get_routines_for_date(plan_date)
+
+        # Apply any date-specific routine overrides (e.g. from Plan My Day UI)
+        overrides_map = {}
+        if routine_overrides:
+            for ro in routine_overrides:
+                r_key = (ro.get("routine_id") or ro.get("name") or ro.get("title", "")).lower()
+                overrides_map[r_key] = ro
+
+        tasks_to_schedule = []
+        for r in applicable_routines:
+            r_key = (r.get("routine_id") or r.get("name") or r.get("title", "")).lower()
+            if r_key in overrides_map:
+                override = overrides_map[r_key]
+                if not override.get("enabled", True):
+                    continue  # User disabled this routine for today
+                r_item = dict(r)
+                if override.get("start_time"):
+                    r_item["start_time"] = override["start_time"]
+                    r_item["start"] = override["start_time"]
+                if override.get("end_time"):
+                    r_item["end_time"] = override["end_time"]
+                    r_item["end"] = override["end_time"]
+                if override.get("duration"):
+                    r_item["duration"] = override["duration"]
+                r_item["source"] = "override"
+                r_item["is_override"] = True
+                tasks_to_schedule.append(r_item)
+            else:
+                r_item = dict(r)
+                r_item["source"] = "routine"
+                tasks_to_schedule.append(r_item)
+
+        # Append one-time tasks
+        if one_time_tasks:
+            for ot in one_time_tasks:
+                ot_item = dict(ot)
+                ot_item.setdefault("source", "one-time")
+                ot_item.setdefault("type", "task")
+                ot_item.setdefault("status", "pending")
+                ot_item.setdefault("date", plan_date)
+                if not ot_item.get("task_id"):
+                    ot_item["task_id"] = uuid.uuid4().hex[:8]
+                tasks_to_schedule.append(ot_item)
+
+        # Generate schedule via deterministic scheduler
+        schedule = schedule_tasks(tasks_to_schedule, plan_date=plan_date)
+
+        # Sync task properties with schedule entries
+        task_by_id = {t.get("task_id"): t for t in tasks_to_schedule if t.get("task_id")}
+        task_by_title = {t.get("title", "").strip().lower(): t for t in tasks_to_schedule if t.get("title")}
+
+        for item in schedule:
+            item.setdefault("status", "pending")
+            item.setdefault("note", "")
+            t_orig = task_by_id.get(item.get("task_id")) or task_by_title.get(item.get("title", "").strip().lower())
+            if t_orig:
+                if "source" in t_orig and "source" not in item:
+                    item["source"] = t_orig["source"]
+                if "category" in t_orig and "category" not in item:
+                    item["category"] = t_orig["category"]
+                if "routine_id" in t_orig and "routine_id" not in item:
+                    item["routine_id"] = t_orig["routine_id"]
+                if "task_id" in t_orig and not item.get("task_id"):
+                    item["task_id"] = t_orig["task_id"]
+            if "source" not in item:
+                if item.get("type") == "routine":
+                    item["source"] = "routine"
+                else:
+                    item["source"] = "one-time"
+
+        return {
+            "plan_id": uuid.uuid4().hex[:8],
+            "date": plan_date,
+            "status": "generated",
+            "schedule": schedule,
+            "tasks": tasks_to_schedule,
+            "input_text": raw_input or "",
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+    def confirm_plan(self, plan_data):
+        """
+        Confirms a generated plan.
+        - If plan_date == today: becomes TODAY'S ACTIVE PLAN.
+        - If plan_date > today: becomes a FUTURE CONFIRMED PLAN.
+        - If plan_date < today: rejects normal confirmation (must use historical edit).
+        """
+        from utils.date_utils import is_past_date, is_today, is_future_date
+
+        plan_date = plan_data.get("date")
+        if not plan_date:
+            raise ValueError("Plan has no date specified.")
+
+        if is_past_date(plan_date):
+            raise ValueError(
+                f"Cannot confirm a plan for a past date ({plan_date}) through normal planning. "
+                "Use the historical edit workflow instead."
+            )
+
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        plan_data["confirmed_at"] = now_str
+
+        # Also store one-time tasks in persistent tasks.json
+        for task in plan_data.get("tasks", []):
+            if task.get("source") == "one-time":
+                try:
+                    self.data_manager.add_task(dict(task))
+                except Exception:
+                    pass
+
+        if is_today(plan_date):
+            plan_data["status"] = "active"
+            self.data_manager.save_active_plan(plan_data)
+            return {
+                "success": True,
+                "status": "active",
+                "message": "Plan confirmed as Today's Active Plan.",
+                "plan": plan_data,
+            }
+        elif is_future_date(plan_date):
+            plan_data["status"] = "future_confirmed"
+            self.data_manager.save_future_plan(plan_date, plan_data)
+            return {
+                "success": True,
+                "status": "future_confirmed",
+                "message": f"Plan for {plan_date} confirmed and stored as a Future Confirmed Plan.",
+                "plan": plan_data,
+            }
+        else:
+            raise ValueError(f"Unknown date status for '{plan_date}'.")
+
+    def get_active_today_plan(self):
+        """
+        Returns the active execution plan for today (auto-processing rollover if necessary).
+        """
+        self.check_date_rollover()
+        active = self.data_manager.load_active_plan()
+        if active and active.get("date") == date.today().isoformat():
+            return active
+        return None
+
+    def update_active_task(self, task_id, status=None, note=None, title=None, start_time=None, end_time=None):
+        """
+        Updates task status/note/timing in Today's Active Plan.
+        """
+        updates = {}
+        if status is not None:
+            updates["status"] = status
+        if note is not None:
+            updates["note"] = note
+        if title is not None:
+            updates["title"] = title
+        if start_time is not None:
+            updates["start"] = start_time
+            updates["start_time"] = start_time
+        if end_time is not None:
+            updates["end"] = end_time
+            updates["end_time"] = end_time
+
+        if not updates:
+            return False
+
+        updated = self.data_manager.update_active_plan_task(task_id, updates)
+        if updated and status:
+            try:
+                self.data_manager.update_task_status(task_id, status)
+            except Exception:
+                pass
+        return updated
+
+    def finalize_active_day(self):
+        """
+        Closes the active day: moves active plan to permanent history and marks finalized.
+        """
+        active = self.data_manager.load_active_plan()
+        if active:
+            return self.data_manager.finalize_plan_to_history(active)
+        return None
+
+    def get_future_plan(self, plan_date):
+        """Returns confirmed future plan for plan_date or None."""
+        return self.data_manager.get_future_plan(plan_date)
+
+    def get_all_future_plans(self):
+        """Returns dictionary of all future confirmed plans."""
+        return self.data_manager.load_future_plans()
+
+    def delete_future_plan(self, plan_date):
+        """Deletes confirmed future plan for plan_date."""
+        return self.data_manager.delete_future_plan(plan_date)
+
+    def edit_historical_record(self, plan_date, task_id, changes, mandatory_note):
+        """
+        Performs audited edit on completed historical record.
+        """
+        return self.data_manager.edit_historical_task(plan_date, task_id, changes, mandatory_note)
+

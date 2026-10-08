@@ -469,6 +469,13 @@ def validate_and_repair_schedule(schedule):
     if has_gym_routine and has_exercise_task:
         schedule = [e for e in schedule if not (e.get("title") in ("Exercise", "Workout", "Gym") and e.get("type") == "task")]
 
+    # 2. Deduplicate meal routines (Breakfast, Lunch, Dinner)
+    for meal in ("breakfast", "lunch", "dinner"):
+        has_meal_routine = any(e.get("title", "").strip().lower() == meal and e.get("type") == "routine" for e in schedule)
+        has_meal_task = any(meal in e.get("title", "").lower() and e.get("type") == "task" for e in schedule)
+        if has_meal_routine and has_meal_task:
+            schedule = [e for e in schedule if not (meal in e.get("title", "").lower() and e.get("type") == "task")]
+
     schedule.sort(key=lambda item: time_to_minutes(item["start"]))
 
     max_passes = 15
@@ -562,7 +569,8 @@ def schedule_tasks(tasks, plan_date=None):
     try:
         from storage.data_manager import DataManager
         dm = DataManager()
-        saved_routines = dm.load_routines()
+        date_iso = target_dt.strftime("%Y-%m-%d")
+        saved_routines = dm.get_routines_for_date(date_iso)
         routines = []
         seen_routine_keys = set()
 

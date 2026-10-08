@@ -968,7 +968,6 @@ class Parser:
         fixed_info = self.detect_fixed_event(text)
         if fixed_info and fixed_info["requires_time"]:
             result["requires_time"] = True
-            result["time_type"] = "missing"
             result["type"] = "event"
 
         return result
