@@ -292,7 +292,7 @@ class Planner:
     # MAIN PLAN METHOD
     # --------------------------------------------------------
 
-    def plan(self, user_input, plan_date=None, _pending_tasks=None):
+    def plan(self, user_input, plan_date=None, _pending_tasks=None, save_to_history=True):
         """
         Processes user input through the full pipeline.
 
@@ -462,19 +462,21 @@ class Planner:
             stored_tasks.append(stored)
 
         # ------------------------------------------------
-        # 8. Generate schedule (also saves to history)
+        # 8. Generate schedule
         # ------------------------------------------------
-        schedule = schedule_tasks(parsed_tasks, plan_date=plan_date)
+        schedule = schedule_tasks(parsed_tasks, plan_date=plan_date, save_to_history=save_to_history)
 
         # ------------------------------------------------
-        # 9. Save plan record with full context
+        # 9. Save plan record with full context (legacy single-day planning)
         # ------------------------------------------------
-        plan_record = self.data_manager.save_plan(
-            plan_date,
-            user_input,
-            schedule,
-            stored_tasks,
-        )
+        plan_record = None
+        if save_to_history:
+            plan_record = self.data_manager.save_plan(
+                plan_date,
+                user_input,
+                schedule,
+                stored_tasks,
+            )
 
         # ------------------------------------------------
         # 10. Update task statuses to "scheduled"
@@ -591,20 +593,69 @@ class Planner:
         Generates a date-specific daily plan from routines, one-time tasks, and optional NLP input.
         Does NOT automatically confirm the plan.
         Returns a plan dictionary in 'generated' state, or clarification dict if needed.
+
+        NLP flow:
+          raw_input
+              ↓
+          existing Parser (self.plan)
+              ↓
+          Normalized tasks extracted (nlp_tasks)
+              ↓
+          Merged with routines + one-time tasks
+              ↓
+          Existing Scheduler
+              ↓
+          Generated Plan
         """
         import uuid
         from core.scheduler import schedule_tasks
 
-        # If natural language input was provided, check if it requires clarification
-        if raw_input and raw_input.strip():
-            nlp_result = self.plan(raw_input.strip(), plan_date=plan_date)
-            if nlp_result.get("needs_clarification"):
-                return nlp_result
+        # --------------------------------------------------
+        # SOURCE 3: Natural Language Instructions
+        # Parse NLP input through the existing pipeline.
+        # If clarification is needed, return immediately.
+        # Otherwise extract the parsed tasks for merging.
+        # --------------------------------------------------
+        nlp_tasks = []
+        nlp_parse_error = None
 
-        # Load applicable routines for this date
+        if raw_input and raw_input.strip():
+            nlp_result = self.plan(raw_input.strip(), plan_date=plan_date, save_to_history=False)
+            if nlp_result.get("needs_clarification"):
+                # Preserve all context so the clarification round-trip works
+                return nlp_result
+            if nlp_result.get("error"):
+                # Parser returned an error — surface it as a user-visible message
+                nlp_parse_error = nlp_result["error"]
+            else:
+                # Extract and tag the NLP-derived tasks
+                for t in nlp_result.get("tasks", []):
+                    t_item = dict(t)
+                    t_item["source"] = "nlp"
+                    t_item.setdefault("type", "task")
+                    t_item.setdefault("status", "pending")
+                    t_item.setdefault("date", plan_date)
+                    if not t_item.get("task_id"):
+                        t_item["task_id"] = uuid.uuid4().hex[:8]
+                    nlp_tasks.append(t_item)
+
+        # If NLP input was given but zero tasks were parsed, tell the user
+        if raw_input and raw_input.strip() and not nlp_tasks and nlp_parse_error is None:
+            nlp_parse_error = (
+                "Could not understand the natural-language instruction. "
+                "Please rephrase it (e.g. \"Study Python for 2 hours after 6 PM\")."
+            )
+
+        # If there was a parse error and no other tasks, propagate as error
+        # (if there are routines/manual tasks we still continue but warn below)
+        if nlp_parse_error and not (one_time_tasks or True):  # always warn but never block
+            pass  # handled below via return dict field
+
+        # --------------------------------------------------
+        # SOURCE 1: Applicable routines + overrides
+        # --------------------------------------------------
         applicable_routines = self.data_manager.get_routines_for_date(plan_date)
 
-        # Apply any date-specific routine overrides (e.g. from Plan My Day UI)
         overrides_map = {}
         if routine_overrides:
             for ro in routine_overrides:
@@ -612,9 +663,13 @@ class Planner:
                 overrides_map[r_key] = ro
 
         tasks_to_schedule = []
+        routine_titles_lower = set()
+        matched_override_keys = set()
+
         for r in applicable_routines:
             r_key = (r.get("routine_id") or r.get("name") or r.get("title", "")).lower()
             if r_key in overrides_map:
+                matched_override_keys.add(r_key)
                 override = overrides_map[r_key]
                 if not override.get("enabled", True):
                     continue  # User disabled this routine for today
@@ -622,20 +677,45 @@ class Planner:
                 if override.get("start_time"):
                     r_item["start_time"] = override["start_time"]
                     r_item["start"] = override["start_time"]
+                elif override.get("start"):
+                    r_item["start_time"] = override["start"]
+                    r_item["start"] = override["start"]
                 if override.get("end_time"):
                     r_item["end_time"] = override["end_time"]
                     r_item["end"] = override["end_time"]
+                elif override.get("end"):
+                    r_item["end_time"] = override["end"]
+                    r_item["end"] = override["end"]
                 if override.get("duration"):
                     r_item["duration"] = override["duration"]
                 r_item["source"] = "override"
                 r_item["is_override"] = True
-                tasks_to_schedule.append(r_item)
             else:
                 r_item = dict(r)
                 r_item["source"] = "routine"
-                tasks_to_schedule.append(r_item)
+            tasks_to_schedule.append(r_item)
+            routine_titles_lower.add((r_item.get("title") or r_item.get("name") or "").strip().lower())
 
-        # Append one-time tasks
+        # Include any routine overrides that were not in applicable_routines
+        for r_key, ro in overrides_map.items():
+            if r_key not in matched_override_keys:
+                if not ro.get("enabled", True):
+                    continue
+                ro_item = dict(ro)
+                ro_item.setdefault("source", "routine")
+                ro_item.setdefault("type", "routine")
+                ro_item.setdefault("time_type", "fixed")
+                if ro.get("start") and not ro.get("start_time"):
+                    ro_item["start_time"] = ro["start"]
+                if ro.get("end") and not ro.get("end_time"):
+                    ro_item["end_time"] = ro["end"]
+                tasks_to_schedule.append(ro_item)
+                routine_titles_lower.add((ro_item.get("title") or ro_item.get("name") or "").strip().lower())
+
+        # --------------------------------------------------
+        # SOURCE 2: Manual one-time tasks
+        # --------------------------------------------------
+        manual_titles_lower = set()
         if one_time_tasks:
             for ot in one_time_tasks:
                 ot_item = dict(ot)
@@ -646,8 +726,22 @@ class Planner:
                 if not ot_item.get("task_id"):
                     ot_item["task_id"] = uuid.uuid4().hex[:8]
                 tasks_to_schedule.append(ot_item)
+                manual_titles_lower.add((ot_item.get("title") or "").strip().lower())
 
+        # --------------------------------------------------
+        # MERGE SOURCE 3: NLP tasks
+        # Deduplicate: skip NLP tasks whose title already
+        # appears in routines or manual tasks.
+        # --------------------------------------------------
+        for nlp_t in nlp_tasks:
+            t_title_lower = (nlp_t.get("title") or "").strip().lower()
+            if t_title_lower and (t_title_lower in routine_titles_lower or t_title_lower in manual_titles_lower):
+                continue  # Already covered by routine or manual task
+            tasks_to_schedule.append(nlp_t)
+
+        # --------------------------------------------------
         # Generate schedule via deterministic scheduler
+        # --------------------------------------------------
         schedule = schedule_tasks(tasks_to_schedule, plan_date=plan_date)
 
         # Sync task properties with schedule entries
@@ -673,7 +767,7 @@ class Planner:
                 else:
                     item["source"] = "one-time"
 
-        return {
+        result = {
             "plan_id": uuid.uuid4().hex[:8],
             "date": plan_date,
             "status": "generated",
@@ -681,7 +775,14 @@ class Planner:
             "tasks": tasks_to_schedule,
             "input_text": raw_input or "",
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "nlp_tasks_count": len(nlp_tasks),
         }
+
+        # Surface NLP parse warning without blocking generation
+        if nlp_parse_error:
+            result["nlp_warning"] = nlp_parse_error
+
+        return result
 
     def confirm_plan(self, plan_data):
         """
@@ -799,4 +900,12 @@ class Planner:
         Performs audited edit on completed historical record.
         """
         return self.data_manager.edit_historical_task(plan_date, task_id, changes, mandatory_note)
+
+    def consolidate_history(self):
+        """
+        Consolidates duplicate historical records so each date has strictly
+        at most one finalized history entry, preserving notes and audits.
+        """
+        return self.data_manager.consolidate_history()
+
 

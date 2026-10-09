@@ -546,10 +546,13 @@ def validate_and_repair_schedule(schedule):
 # SCHEDULE MULTIPLE TASKS
 # ============================================================
 
-def schedule_tasks(tasks, plan_date=None):
+def schedule_tasks(tasks, plan_date=None, save_to_history=None):
     """
     Main scheduling function.
     """
+    if save_to_history is None:
+        save_to_history = (plan_date is None)
+
     for task in tasks:
         task["task_id"] = get_or_create_task_id(task)
 
@@ -672,7 +675,8 @@ def schedule_tasks(tasks, plan_date=None):
     # 4. VALIDATE & REPAIR FINAL SCHEDULE (Zero overlaps guaranteed)
     final_schedule = validate_and_repair_schedule(final_schedule)
 
-    # Save to history
-    add_plan_to_history(final_schedule)
+    # Save to history for legacy single-day calls without plan_date
+    if save_to_history:
+        add_plan_to_history(final_schedule)
 
     return final_schedule

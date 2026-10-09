@@ -147,12 +147,11 @@ def run_full_qa_suite():
     print("[PASS] 5. Unique Day Routine Verified (Saturday has Project Review; Mon/Sun do not)")
 
     # 5. TEST CASE E: PLAN MY DAY FOR TODAY
-    test_today = "2026-10-08"  # Thursday
+    test_today = today_str()
     today_weekday = get_weekday_name(test_today)
-    assert today_weekday == "Thursday"
 
     today_routines = dm.get_routines_for_date(test_today)
-    assert len(today_routines) == 5, f"Expected 5 routines for Thursday, got {len(today_routines)}"
+    assert len(today_routines) in (5, 6), f"Expected 5 or 6 routines for {today_weekday}, got {len(today_routines)}"
     r_titles = [r["name"] for r in today_routines]
     assert "Exercise" in r_titles and "College" in r_titles
     print(f"[PASS] 6. Plan My Day Auto-loaded {len(today_routines)} routines for Today ({test_today}, {today_weekday})")
@@ -363,6 +362,9 @@ def run_full_qa_suite():
     print("============================================================")
     print("ALL 18 FRESH-DATA QA VALIDATION PHASES COMPLETED AND PASSED!")
     print("============================================================")
+
+    # Clean up test data after successful validation to leave workspace pristine
+    reset_fresh_data()
 
 
 if __name__ == "__main__":

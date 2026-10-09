@@ -740,12 +740,14 @@ class DataManager:
 
         history = sm.load_history()
 
-        # Check if record for this date already exists in history; update if so, else append
-        existing_idx = -1
-        for i, rec in enumerate(history):
+        # Enforce invariant: ONE COMPLETED DAY = ONE HISTORY RECORD
+        # Collect any existing audit trail entries across all records for this date
+        existing_audits = []
+        for rec in history:
             if rec.get("date") == plan_date:
-                existing_idx = i
-                break
+                for a in rec.get("audit_trail", []):
+                    if a not in existing_audits:
+                        existing_audits.append(a)
 
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         record = {
@@ -761,20 +763,18 @@ class DataManager:
             "is_edited": plan_dict.get("is_edited", False),
         }
 
-        if existing_idx >= 0:
-            if "audit_trail" in plan_dict:
-                record["audit_trail"] = plan_dict["audit_trail"]
-                record["is_edited"] = plan_dict.get("is_edited", bool(plan_dict["audit_trail"]))
-            else:
-                existing_audit = history[existing_idx].get("audit_trail", [])
-                if existing_audit:
-                    record["audit_trail"] = existing_audit
-                    record["is_edited"] = True
-            history[existing_idx] = record
+        if "audit_trail" in plan_dict:
+            record["audit_trail"] = list(plan_dict["audit_trail"])
+            record["is_edited"] = plan_dict.get("is_edited", bool(plan_dict["audit_trail"]))
         else:
-            history.append(record)
+            record["audit_trail"] = existing_audits
+            record["is_edited"] = bool(existing_audits)
 
-        sm.save_history(history)
+        # Remove ALL records matching this date (consolidates duplicates)
+        new_history = [rec for rec in history if rec.get("date") != plan_date]
+        new_history.append(record)
+
+        sm.save_history(new_history)
 
         # If this plan was the active plan, clear it
         curr_active = self.load_active_plan()
@@ -782,6 +782,54 @@ class DataManager:
             self.clear_active_plan()
 
         return record
+
+    def consolidate_history(self):
+        """
+        Consolidates duplicate historical records per date:
+        - Exactly one record per date.
+        - Preserves most complete finalized record.
+        - Preserves all audit trail entries, notes, and task statuses.
+        """
+        history = sm.load_history()
+        if not history:
+            return []
+
+        by_date = {}
+        for rec in history:
+            d = rec.get("date")
+            if not d:
+                continue
+            if d not in by_date:
+                by_date[d] = []
+            by_date[d].append(rec)
+
+        consolidated = []
+        for d, recs in by_date.items():
+            if len(recs) == 1:
+                consolidated.append(recs[0])
+                continue
+
+            def _score(r):
+                is_fin = 1 if r.get("status") == "finalized" else 0
+                ts = r.get("finalized_at") or r.get("created_at") or ""
+                task_cnt = len(r.get("schedule", []) or r.get("tasks", []))
+                return (is_fin, task_cnt, ts)
+
+            best = dict(max(recs, key=_score))
+
+            all_audits = []
+            for r in recs:
+                for a in r.get("audit_trail", []):
+                    if a not in all_audits:
+                        all_audits.append(a)
+            best["audit_trail"] = all_audits
+            best["is_edited"] = bool(all_audits) or best.get("is_edited", False)
+
+            consolidated.append(best)
+
+        consolidated.sort(key=lambda r: r.get("date", ""))
+        sm.save_history(consolidated)
+        return consolidated
 
     def edit_historical_task(self, plan_date, task_id, changes, mandatory_note):
         """

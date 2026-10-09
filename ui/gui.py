@@ -203,6 +203,179 @@ def format_12h(time_str):
 
 
 # ============================================================
+# HELPER – PURE-TKINTER CALENDAR DATE PICKER
+# ============================================================
+
+class CalendarPicker(tk.Toplevel):
+    """
+    A lightweight, pure-Tkinter calendar popup.
+    No third-party dependencies — uses only tkinter + datetime.
+
+    Usage:
+        CalendarPicker(parent, date_var, callback=None)
+        - date_var  : tk.StringVar that receives the selected YYYY-MM-DD date.
+        - callback  : optional callable invoked after date selection.
+    """
+
+    _DAYS_SHORT = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
+
+    _HDR_BG     = PRIMARY_BLUE
+    _HDR_FG     = "#ffffff"
+    _CELL_BG    = BG_CARD
+    _CELL_FG    = FG_MAIN
+    _SEL_BG     = PRIMARY_BLUE
+    _SEL_FG     = "#ffffff"
+    _TODAY_BG   = "#eff6ff"
+    _TODAY_FG   = PRIMARY_BLUE
+    _OTHER_FG   = "#94a3b8"   # days from adjacent month
+
+    def __init__(self, parent, date_var, callback=None):
+        super().__init__(parent)
+        self._date_var = date_var
+        self._callback  = callback
+
+        # Determine initial display month
+        try:
+            initial = datetime.strptime(date_var.get().strip(), "%Y-%m-%d").date()
+        except Exception:
+            initial = date.today()
+
+        self._view_year  = initial.year
+        self._view_month = initial.month
+        self._selected   = initial
+
+        self.title("Pick a Date")
+        self.resizable(False, False)
+        self.configure(bg=BG_CARD)
+        self.transient(parent)
+        self.grab_set()
+
+        # Position near parent
+        px, py = parent.winfo_rootx(), parent.winfo_rooty()
+        self.geometry(f"270x240+{px + 60}+{py + 120}")
+
+        self._build()
+        self.wait_window(self)
+
+    # ----------------------------------------------------------
+
+    def _build(self):
+        """Build / re-build the calendar grid."""
+        for w in self.winfo_children():
+            w.destroy()
+
+        # ── Header (month navigation) ──────────────────────────
+        hdr = tk.Frame(self, bg=self._HDR_BG, padx=4, pady=4)
+        hdr.pack(fill="x")
+
+        tk.Button(
+            hdr, text="◀", font=("Segoe UI", 9, "bold"),
+            bg=self._HDR_BG, fg=self._HDR_FG,
+            relief="flat", bd=0, padx=6, cursor="hand2",
+            activebackground=PRIMARY_HOVER, activeforeground="#fff",
+            command=self._prev_month,
+        ).pack(side="left")
+
+        import calendar as cal_mod
+        month_name = cal_mod.month_name[self._view_month]
+        tk.Label(
+            hdr, text=f"{month_name} {self._view_year}",
+            font=("Segoe UI", 10, "bold"),
+            bg=self._HDR_BG, fg=self._HDR_FG,
+        ).pack(side="left", expand=True)
+
+        tk.Button(
+            hdr, text="▶", font=("Segoe UI", 9, "bold"),
+            bg=self._HDR_BG, fg=self._HDR_FG,
+            relief="flat", bd=0, padx=6, cursor="hand2",
+            activebackground=PRIMARY_HOVER, activeforeground="#fff",
+            command=self._next_month,
+        ).pack(side="right")
+
+        # ── Day-of-week header row ─────────────────────────────
+        dow_row = tk.Frame(self, bg=BG_PANEL)
+        dow_row.pack(fill="x")
+        for d in self._DAYS_SHORT:
+            tk.Label(
+                dow_row, text=d, width=3,
+                font=("Segoe UI", 8, "bold"),
+                fg=FG_MUTED, bg=BG_PANEL, anchor="center",
+            ).pack(side="left", padx=1, pady=2)
+
+        # ── Calendar grid ──────────────────────────────────────
+        import calendar as cal_mod
+        today = date.today()
+        cal = cal_mod.monthcalendar(self._view_year, self._view_month)
+
+        grid_frame = tk.Frame(self, bg=BG_CARD)
+        grid_frame.pack(fill="both", expand=True, padx=2, pady=2)
+
+        for week in cal:
+            row = tk.Frame(grid_frame, bg=BG_CARD)
+            row.pack(fill="x", pady=0)
+            for day_num in week:
+                if day_num == 0:
+                    tk.Label(row, text="", width=3, bg=BG_CARD).pack(side="left", padx=1, pady=1)
+                    continue
+
+                cell_date = date(self._view_year, self._view_month, day_num)
+                is_today    = (cell_date == today)
+                is_selected = (cell_date == self._selected)
+
+                if is_selected:
+                    bg, fg = self._SEL_BG, self._SEL_FG
+                    font = ("Segoe UI", 9, "bold")
+                elif is_today:
+                    bg, fg = self._TODAY_BG, self._TODAY_FG
+                    font = ("Segoe UI", 9, "bold")
+                else:
+                    bg, fg = self._CELL_BG, self._CELL_FG
+                    font = ("Segoe UI", 9)
+
+                btn = tk.Button(
+                    row, text=str(day_num), width=3,
+                    font=font, bg=bg, fg=fg,
+                    relief="flat", bd=0, padx=1, pady=3,
+                    cursor="hand2",
+                    activebackground=self._SEL_BG,
+                    activeforeground=self._SEL_FG,
+                    command=lambda d=cell_date: self._select(d),
+                )
+                btn.pack(side="left", padx=1, pady=1)
+
+        # ── Footer: Today shortcut ─────────────────────────────
+        foot = tk.Frame(self, bg=BG_PANEL)
+        foot.pack(fill="x", pady=(4, 0))
+        tk.Button(
+            foot, text="Today", font=("Segoe UI", 8),
+            bg=BTN_SEC_BG, fg=FG_MUTED,
+            relief="flat", cursor="hand2",
+            padx=8, pady=2,
+            command=lambda: self._select(date.today()),
+        ).pack(side="right", padx=6, pady=2)
+
+    def _select(self, selected_date):
+        self._date_var.set(selected_date.strftime("%Y-%m-%d"))
+        if self._callback:
+            self._callback(selected_date.strftime("%Y-%m-%d"))
+        self.destroy()
+
+    def _prev_month(self):
+        if self._view_month == 1:
+            self._view_month, self._view_year = 12, self._view_year - 1
+        else:
+            self._view_month -= 1
+        self._build()
+
+    def _next_month(self):
+        if self._view_month == 12:
+            self._view_month, self._view_year = 1, self._view_year + 1
+        else:
+            self._view_month += 1
+        self._build()
+
+
+# ============================================================
 # HELPER – HOVER BUTTON
 # ============================================================
 
@@ -920,7 +1093,7 @@ class DayWiseApp(tk.Tk):
         scroll.pack(fill="both", expand=True, pady=(6, 0))
         body = scroll.inner
 
-        # --- Card 1: Date Selector ---
+        # --- Card 1: Date Selector (Calendar Picker) ---
         date_card = tk.Frame(
             body, bg=BG_CARD,
             highlightbackground=BORDER_COLOR, highlightthickness=1,
@@ -929,20 +1102,21 @@ class DayWiseApp(tk.Tk):
         date_card.pack(fill="x", pady=(0, 12))
 
         tk.Label(
-            date_card, text="📅 Select Planning Date:",
+            date_card, text="📅 Planning Date:",
             font=FONT_SUBHEAD, fg=FG_MAIN, bg=BG_CARD,
         ).pack(side="left", padx=(0, 10))
 
         if not hasattr(self, "_plan_date_var") or not self._plan_date_var.get():
             self._plan_date_var = tk.StringVar(value=today_str())
 
+        # Display entry (read-only presentation; user can also type directly)
         date_entry = tk.Entry(
             date_card, textvariable=self._plan_date_var,
-            font=FONT_BODY, bg=ENTRY_BG, fg=ENTRY_FG,
+            font=("Segoe UI", 10, "bold"), bg=ENTRY_BG, fg=PRIMARY_BLUE,
             highlightbackground=ENTRY_BORDER, highlightthickness=1,
-            relief="flat", width=14,
+            relief="flat", width=13,
         )
-        date_entry.pack(side="left", padx=(0, 8), ipady=3)
+        date_entry.pack(side="left", padx=(0, 4), ipady=3)
 
         def _set_date(d_str):
             self._plan_date_var.set(d_str)
@@ -951,9 +1125,23 @@ class DayWiseApp(tk.Tk):
             self._current_generated_plan = None
             self._refresh_applicable_routines_display()
 
+        def _open_calendar():
+            """Opens the CalendarPicker popup; _set_date is called on selection."""
+            CalendarPicker(self, self._plan_date_var, callback=_set_date)
+
+        # Calendar icon button
+        HoverButton(
+            date_card, hover_bg=PRIMARY_HOVER,
+            text="📆 Pick Date", font=FONT_SMALL,
+            bg=BTN_BG, fg=BTN_FG,
+            relief="flat", padx=8, pady=3, cursor="hand2",
+            command=_open_calendar,
+        ).pack(side="left", padx=(0, 6))
+
+        # Quick shortcuts
         HoverButton(date_card, hover_bg=BTN_SEC_HOVER, text="Today", font=FONT_SMALL, bg=BTN_SEC_BG, fg=BTN_SEC_FG, relief="flat", padx=8, pady=3, cursor="hand2", command=lambda: _set_date(today_str())).pack(side="left", padx=2)
         HoverButton(date_card, hover_bg=BTN_SEC_HOVER, text="Tomorrow", font=FONT_SMALL, bg=BTN_SEC_BG, fg=BTN_SEC_FG, relief="flat", padx=8, pady=3, cursor="hand2", command=lambda: _set_date(tomorrow_str())).pack(side="left", padx=2)
-        HoverButton(date_card, hover_bg=PRIMARY_HOVER, text="Load Date", font=FONT_SMALL, bg=BTN_BG, fg=BTN_FG, relief="flat", padx=8, pady=3, cursor="hand2", command=lambda: _set_date(self._plan_date_var.get().strip())).pack(side="left", padx=6)
+        HoverButton(date_card, hover_bg=PRIMARY_HOVER, text="Load", font=FONT_SMALL, bg=BTN_BG, fg=BTN_FG, relief="flat", padx=8, pady=3, cursor="hand2", command=lambda: _set_date(self._plan_date_var.get().strip())).pack(side="left", padx=6)
 
         # --- Card 2: Applicable Routines for this Day ---
         self._routines_box = tk.Frame(
@@ -1256,6 +1444,23 @@ class DayWiseApp(tk.Tk):
         if result.get("needs_clarification"):
             self._handle_plan_result(result, raw_text, plan_date)
             return
+
+        # Show NLP warning if natural language could not be fully parsed
+        if result.get("nlp_warning"):
+            messagebox.showwarning(
+                "Natural Language Instruction",
+                result["nlp_warning"] + "\n\nThe rest of your routines and manual tasks have been scheduled normally.",
+                parent=self,
+            )
+
+        # Inform user about NLP tasks included
+        nlp_count = result.get("nlp_tasks_count", 0)
+        if nlp_count and raw_text:
+            self._plan_status.config(
+                text=f"💬 {nlp_count} NLP task(s) included from your instruction. Review and confirm below.",
+                fg="#1d4ed8",
+            )
+            self.update_idletasks()
 
         self._current_generated_plan = result
         self._render_plan_review_and_confirm(result)
@@ -1590,59 +1795,144 @@ class DayWiseApp(tk.Tk):
         self._render_history_records(records)
 
     def _render_history_records(self, records):
-        """Renders list of historical day cards with audit trail details and controlled edit buttons."""
+        """Collapsible accordion-style history. ONE ROW PER DATE, all collapsed by default."""
         parent = self._history_list_container.inner
         for w in parent.winfo_children():
             w.destroy()
 
         if not records:
-            card = tk.Frame(parent, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0, padx=20, pady=30)
+            card = tk.Frame(parent, bg=BG_CARD, highlightbackground=BORDER_COLOR,
+                            highlightthickness=1, bd=0, padx=20, pady=30)
             card.pack(fill="x", pady=10)
-            tk.Label(card, text="No history records found.", font=FONT_BODY, fg=FG_MUTED, bg=BG_CARD).pack()
+            tk.Label(card, text="No history records found.", font=FONT_BODY,
+                     fg=FG_MUTED, bg=BG_CARD).pack()
             return
 
-        for record in reversed(records):
-            rec_date = record.get("date", "Unknown Date")
-            created = record.get("created_at", "")
-            finalized = record.get("finalized_at", created)
+        # Deduplicate: keep best record per date
+        best_by_date = {}
+        for rec in records:
+            d = rec.get("date", "")
+            if not d:
+                continue
+            existing = best_by_date.get(d)
+            if existing is None:
+                best_by_date[d] = rec
+            else:
+                if rec.get("status", "") == "finalized" and existing.get("status", "") != "finalized":
+                    best_by_date[d] = rec
+                elif len(rec.get("schedule", [])) > len(existing.get("schedule", [])):
+                    best_by_date[d] = rec
+                elif rec.get("finalized_at", "") > existing.get("finalized_at", ""):
+                    best_by_date[d] = rec
+
+        if not best_by_date:
+            card = tk.Frame(parent, bg=BG_CARD, highlightbackground=BORDER_COLOR,
+                            highlightthickness=1, bd=0, padx=20, pady=30)
+            card.pack(fill="x", pady=10)
+            tk.Label(card, text="No history records found.", font=FONT_BODY,
+                     fg=FG_MUTED, bg=BG_CARD).pack()
+            return
+
+        sorted_dates = sorted(best_by_date.keys(), reverse=True)
+
+        for rec_date in sorted_dates:
+            record = best_by_date[rec_date]
             sched = record.get("schedule", [])
-            is_edited = record.get("is_edited", False)
             audit_trail = record.get("audit_trail", [])
+            is_edited = record.get("is_edited", False)
+            finalized = record.get("finalized_at", record.get("created_at", ""))
+            task_count = len([e for e in sched if e.get("type") != "break"])
 
-            card = tk.Frame(parent, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0, padx=16, pady=14)
-            card.pack(fill="x", pady=8)
+            row_outer = tk.Frame(parent, bg=BG_CARD,
+                                 highlightbackground=BORDER_COLOR, highlightthickness=1, bd=0)
+            row_outer.pack(fill="x", pady=(0, 6))
 
-            # Header line
-            hdr = tk.Frame(card, bg=BG_CARD)
-            hdr.pack(fill="x", pady=(0, 8))
+            collapsed_hdr = tk.Frame(row_outer, bg=BG_CARD, padx=16, pady=10)
+            collapsed_hdr.pack(fill="x")
 
-            date_label = format_date_display(rec_date)
-            tk.Label(hdr, text=f"📅 {date_label}", font=FONT_HEADING, fg=PRIMARY_BLUE, bg=BG_CARD).pack(side="left")
+            detail_frame = tk.Frame(row_outer, bg=BG_CARD, padx=16, pady=0)
+
+            chev = tk.Label(collapsed_hdr, text="\u25b6", font=("Segoe UI", 9),
+                            fg=FG_MUTED, bg=BG_CARD, cursor="hand2")
+            chev.pack(side="left", padx=(0, 8))
+
+            date_display = format_date_display(rec_date)
+            date_lbl = tk.Label(collapsed_hdr, text=f"\ud83d\udcc5  {date_display}",
+                                font=FONT_HEADING, fg=PRIMARY_BLUE, bg=BG_CARD, cursor="hand2")
+            date_lbl.pack(side="left")
+
+            chip_bg = "#dcfce7" if task_count > 0 else "#f1f5f9"
+            chip_fg = "#166534" if task_count > 0 else FG_MUTED
+            tk.Label(collapsed_hdr,
+                     text=f"  {task_count} task{'s' if task_count != 1 else ''}  ",
+                     font=("Segoe UI", 8, "bold"), fg=chip_fg, bg=chip_bg,
+                     padx=4, pady=2).pack(side="left", padx=8)
 
             if is_edited:
-                tk.Label(hdr, text=" [EDITED HISTORICAL RECORD] ", font=("Segoe UI", 8, "bold"), fg="#92400e", bg="#fef3c7", padx=6, pady=2).pack(side="left", padx=8)
+                tk.Label(collapsed_hdr, text=" \u270e EDITED ",
+                         font=("Segoe UI", 8, "bold"), fg="#92400e", bg="#fef3c7",
+                         padx=4, pady=2).pack(side="left", padx=2)
 
-            tk.Label(hdr, text=f"Finalized: {finalized}", font=FONT_SMALL, fg=FG_MUTED, bg=BG_CARD).pack(side="left", padx=8)
+            finalized_short = finalized[:10] if finalized else ""
+            tk.Label(collapsed_hdr, text=f"Finalized {finalized_short}",
+                     font=FONT_SMALL, fg=FG_MUTED, bg=BG_CARD).pack(side="right", padx=(0, 4))
 
-            # Controlled Historical Edit button (preserves strict audit rule: confirmation + mandatory note)
+            _state = {"expanded": False}
+
+            def _make_toggle(chev_w, state_d, detail_f):
+                def _toggle(event=None):
+                    state_d["expanded"] = not state_d["expanded"]
+                    if state_d["expanded"]:
+                        detail_f.pack(fill="x", padx=0, pady=(0, 12))
+                        chev_w.config(text="\u25bc")
+                    else:
+                        detail_f.pack_forget()
+                        chev_w.config(text="\u25b6")
+                return _toggle
+
+            toggle_fn = _make_toggle(chev, _state, detail_frame)
+            for widget in (collapsed_hdr, chev, date_lbl):
+                widget.bind("<Button-1>", toggle_fn)
+
+            sep = tk.Frame(detail_frame, bg=BORDER_COLOR, height=1)
+            sep.pack(fill="x", pady=(0, 8))
+
+            sched_frame = tk.Frame(detail_frame, bg=BG_CARD)
+            sched_frame.pack(fill="x", pady=(4, 0))
+            render_schedule(sched_frame, sched, bg=BG_CARD, compact=True)
+
+            if audit_trail:
+                audit_box = tk.Frame(detail_frame, bg="#fffbeb", padx=12, pady=8,
+                                     highlightbackground="#fde68a", highlightthickness=1, bd=0)
+                audit_box.pack(fill="x", pady=(8, 4))
+                tk.Label(audit_box, text="\ud83d\udccb Historical Edit Audit Trail:",
+                         font=("Segoe UI", 9, "bold"), fg="#92400e", bg="#fffbeb").pack(anchor="w")
+                for a in audit_trail:
+                    tk.Label(audit_box,
+                             text=f"\u2022 [{a.get('edited_at')}] {a.get('task_title')} \u2014 \"{a.get('edit_reason')}\"",
+                             font=FONT_SMALL, fg=FG_MAIN, bg="#fffbeb",
+                             wraplength=700, justify="left").pack(anchor="w")
+
+            edit_btn_row = tk.Frame(detail_frame, bg=BG_CARD)
+            edit_btn_row.pack(fill="x", pady=(6, 4))
+
             def _open_historical_edit(pdate=rec_date, r_dict=record):
-                # Step 1: Confirmation
                 if not messagebox.askyesno(
                     "Historical Edit Confirmation",
                     "You are about to modify a completed historical record.\n\n"
-                    "This action will create an immutable audit trail entry with your mandatory note.\n\n"
+                    "This will create an immutable audit trail entry.\n\n"
                     "Do you want to continue?",
                     parent=self,
                 ):
                     return
 
-                # Step 2: Modal for audited edit with MANDATORY note
                 dlg = tk.Toplevel(self)
-                dlg.title(f"Controlled Historical Edit – {pdate}")
+                dlg.title(f"Controlled Historical Edit \u2013 {pdate}")
                 dlg.geometry("440x360")
                 dlg.configure(bg=BG_MAIN)
 
-                tk.Label(dlg, text=f"Edit Historical Record for {pdate}", font=FONT_HEADING, fg=FG_MAIN, bg=BG_MAIN).pack(pady=10)
+                tk.Label(dlg, text=f"Edit Historical Record for {pdate}",
+                         font=FONT_HEADING, fg=FG_MAIN, bg=BG_MAIN).pack(pady=10)
 
                 f = tk.Frame(dlg, bg=BG_MAIN, padx=20)
                 f.pack(fill="both", expand=True)
@@ -1659,53 +1949,42 @@ class DayWiseApp(tk.Tk):
                 status_var = tk.StringVar(value="completed")
                 ttk.Combobox(f, textvariable=status_var, values=["completed", "not_completed", "pending"], state="readonly", width=34).pack(fill="x", pady=4)
 
-                tk.Label(f, text="Mandatory Edit Reason / Note (*REQUIRED):", font=("Segoe UI", 9, "bold"), fg="#991b1b", bg=BG_MAIN).pack(anchor="w", pady=(8, 0))
+                tk.Label(f, text="Mandatory Edit Reason / Note (*REQUIRED):",
+                         font=("Segoe UI", 9, "bold"), fg="#991b1b", bg=BG_MAIN).pack(anchor="w", pady=(8, 0))
                 note_var = tk.StringVar()
-                n_ent = tk.Entry(f, textvariable=note_var, font=FONT_BODY, bg=ENTRY_BG, fg=ENTRY_FG, relief="flat", highlightbackground=ENTRY_BORDER, highlightthickness=1)
+                n_ent = tk.Entry(f, textvariable=note_var, font=FONT_BODY, bg=ENTRY_BG, fg=ENTRY_FG,
+                                 relief="flat", highlightbackground=ENTRY_BORDER, highlightthickness=1)
                 n_ent.pack(fill="x", ipady=4, pady=4)
 
                 def _save_hist_edit():
                     reason = note_var.get().strip()
                     if not reason:
-                        messagebox.showerror("Validation Error", "A non-empty note is MANDATORY for historical edits.", parent=dlg)
+                        messagebox.showerror("Validation Error",
+                                             "A non-empty note is MANDATORY for historical edits.", parent=dlg)
                         return
-
                     t_name = task_choice_var.get()
                     st = status_var.get()
-
                     try:
                         self.planner.edit_historical_record(
-                            plan_date=pdate,
-                            task_id=t_name,
-                            changes={"status": st},
-                            mandatory_note=reason,
-                        )
-                        messagebox.showinfo("Historical Edit Saved", "Historical record updated and audit trail preserved.", parent=dlg)
+                            plan_date=pdate, task_id=t_name,
+                            changes={"status": st}, mandatory_note=reason)
+                        messagebox.showinfo("Historical Edit Saved",
+                                            "Historical record updated and audit trail preserved.", parent=dlg)
                         dlg.destroy()
                         self._page_history()
                     except Exception as err:
                         messagebox.showerror("Error", str(err), parent=dlg)
 
-                HoverButton(dlg, hover_bg=PRIMARY_HOVER, text=" Confirm & Save Audit Record ", font=FONT_SUBHEAD, bg=BTN_BG, fg=BTN_FG, relief="flat", padx=14, pady=6, cursor="hand2", command=_save_hist_edit).pack(pady=12)
+                HoverButton(dlg, hover_bg=PRIMARY_HOVER, text=" Confirm & Save Audit Record ",
+                            font=FONT_SUBHEAD, bg=BTN_BG, fg=BTN_FG, relief="flat",
+                            padx=14, pady=6, cursor="hand2", command=_save_hist_edit).pack(pady=12)
 
-            HoverButton(hdr, hover_bg=BTN_SEC_HOVER, text=" ✎ Edit Historical Task ", font=FONT_SMALL, bg=BTN_SEC_BG, fg=BTN_SEC_FG, relief="flat", padx=8, pady=3, cursor="hand2", command=_open_historical_edit).pack(side="right")
+            HoverButton(edit_btn_row, hover_bg=BTN_SEC_HOVER,
+                        text=" \u270e Edit Historical Task ", font=FONT_SMALL,
+                        bg=BTN_SEC_BG, fg=BTN_SEC_FG, relief="flat",
+                        padx=8, pady=3, cursor="hand2",
+                        command=_open_historical_edit).pack(side="right")
 
-            # Render schedule
-            sched_frame = tk.Frame(card, bg=BG_CARD)
-            sched_frame.pack(fill="x")
-            render_schedule(sched_frame, sched, bg=BG_CARD, compact=True)
-
-            # Audit Trail Box
-            if audit_trail:
-                audit_box = tk.Frame(card, bg="#fffbeb", padx=12, pady=8, highlightbackground="#fde68a", highlightthickness=1, bd=0)
-                audit_box.pack(fill="x", pady=(10, 0))
-                tk.Label(audit_box, text="📋 Historical Edit Audit Trail:", font=("Segoe UI", 9, "bold"), fg="#92400e", bg="#fffbeb").pack(anchor="w")
-                for a in audit_trail:
-                    tk.Label(
-                        audit_box,
-                        text=f"• [{a.get('edited_at')}] Task: {a.get('task_title')} | Reason: \"{a.get('edit_reason')}\"",
-                        font=FONT_SMALL, fg=FG_MAIN, bg="#fffbeb",
-                    ).pack(anchor="w")
 
     def _history_search(self):
         query = self._hist_search_var.get().strip()
